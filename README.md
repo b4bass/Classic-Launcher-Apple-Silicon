@@ -1,21 +1,23 @@
 # Classic-Launcher-Apple-Silicon
 
-Copy custom_launcher folder inside your Classic_1.14.0.40618_macOS client folder
+Extract the repository content into your  Classic_1.14.0.40618_macOS directory 
 
+> unzip -d Classic-Launcher-Apple-Silicon-main.zip ./custom_launcher
+> 
 >cd custom_launcher/
 >
 >chmod+x launch.sh
 > 
 >./launch.sh
 
-Type yes to use HermesProxy so you can connect to legacy 1.12 servers
+When prompted, type yes to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS)
 <br/>
 <br/>
 
 
 >sudo xattr -c -r custom_launcher
 
-You may need to allow the app to run in gatekeeper if you have quarantine issues
+If you have quarantine issues, you may need to manually allow the app to run in gatekeeper
 <br/>
 <br/>
 
@@ -32,7 +34,7 @@ To reset configuration
 <br/>
 <br/>
 <br/>
-### Classic Launcher.app Compilation
+### Classic Launcher.app Compilation (Optional)
 
 >cd custom_launcher/build/
 >
@@ -43,4 +45,4 @@ To reset configuration
 <br/>
 <br/>
 
-credits: github.com/0blu
+credits: github.com/Blu github.com/Arctium
