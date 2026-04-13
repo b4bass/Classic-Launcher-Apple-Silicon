@@ -1,8 +1,8 @@
 # Classic-Launcher-Apple-Silicon
 
-Extract the repository content into your  Classic_1.14.0.40618_macOS directory 
+Place the downloaded repository ZIP file into your Game directory, alongside the Data and classic_era folders. Then extract the ZIP into a new folder in that location.
 
-> unzip -d Classic-Launcher-Apple-Silicon-main.zip ./custom_launcher
+> unzip -d Classic-Launcher-Apple-Silicon-main.zip custom_launcher
 > 
 >cd custom_launcher/
 >
@@ -15,7 +15,7 @@ When prompted, type yes to use HermesProxy so you can connect to legacy 1.12 ser
 <br/>
 
 
->sudo xattr -c -r custom_launcher
+>sudo xattr -cr custom_launcher/
 
 If you have quarantine issues, you may need to manually allow the app to run in gatekeeper
 <br/>
