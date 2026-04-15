@@ -4,9 +4,8 @@ Extract the contents of the folder inside the downloaded ZIP into your game dire
 
 ```bash
 tar xf Classic-Launcher-Apple-Silicon-main.zip --strip-components=1
-cd custom_launcher/
-chmod +x launch.sh
-./launch.sh
+chmod +x custom_launcher/launch.sh
+./custom_launcher/launch.sh
 ```
 
 Your directory should look like this:
@@ -15,8 +14,8 @@ Your directory should look like this:
 Game/
 ├── Data/
 ├── classic_era/
-├── custom_launcher/    ← from this repo
-└── build/              ← from this repo
+├── custom_launcher/  ← from this repo
+└── build/            ← from this repo
 ```
 
 When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS).
@@ -38,16 +37,15 @@ sudo xattr -cr custom_launcher/
 To reset configuration.
 
 ```bash
-./launch.sh --reset
+./custom_launcher/launch.sh --reset
 ```
 <br/>
 
 ### Classic Launcher.app Compilation (Optional)
 
 ```bash
-cd build/
-chmod +x build_launcher.sh
-./build_launcher.sh
+chmod +x build/build_launcher.sh
+./build/build_launcher.sh
 ```
 
 <br/>
