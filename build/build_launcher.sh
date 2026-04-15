@@ -1,9 +1,8 @@
 #!/bin/bash
 
-BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # custom_launcher/build/
-LAUNCHER_DIR="$(dirname "$BUILD_DIR")"                      # custom_launcher/
-BASE_DIR="$(dirname "$LAUNCHER_DIR")"                       # wow root
-
+BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # build/
+BASE_DIR="$(dirname "$BUILD_DIR")"                         # wow root
+LAUNCHER_DIR="$BASE_DIR/custom_launcher"                   # custom_launcher/
 APP_NAME="WoW Classic Launcher"
 APP_OUT="$BASE_DIR/$APP_NAME.app"
 ICON_PNG="$BUILD_DIR/wow.png"
