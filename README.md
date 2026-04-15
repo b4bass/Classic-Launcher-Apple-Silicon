@@ -1,26 +1,19 @@
 # Classic-Launcher-Apple-Silicon
 
-Place the downloaded repository ZIP file into your Game directory, alongside the Data and classic_era folders. Then extract the ZIP into a new folder in that location.
+Extract the contents of the folder inside the downloaded ZIP into your game directory.
 
-> unzip -d Classic-Launcher-Apple-Silicon-main.zip custom_launcher
+>tar xf Classic-Launcher-Apple-Silicon-main.zip --strip-components=1
 > 
 >cd custom_launcher/
 >
->chmod+x launch.sh
+>chmod +x launch.sh
 > 
 >./launch.sh
+>
 
 When prompted, type yes to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS)
 <br/>
 <br/>
-
-
->sudo xattr -cr custom_launcher/
-
-If you have quarantine issues, you may need to manually allow the app to run in gatekeeper
-<br/>
-<br/>
-
 
 >shasum 200c4c54316fb801d6d4d07d7031bb2b43f1c2be
 >
@@ -33,16 +26,21 @@ Patcher applies 40618.patch to the Apple Silicon (ARM) build of the Classic 1.14
 To reset configuration
 <br/>
 <br/>
+>sudo xattr -cr custom_launcher/
+
+If you have quarantine issues, you may need to manually allow the app to run in gatekeeper
+<br/>
 <br/>
 ### Classic Launcher.app Compilation (Optional)
 
->cd custom_launcher/build/
+>cd build/
 >
->chmod+x build_launcher.sh
+>chmod +x build_launcher.sh
 >
 >./build_launcher.sh
 
 <br/>
 <br/>
+
 
 credits: github.com/0Blu github.com/Arctium
