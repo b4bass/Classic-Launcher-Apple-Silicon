@@ -35,12 +35,13 @@ echo "[*] Building $APP_NAME.app..."
 rm -rf "$APP_OUT"
 osacompile -o "$APP_OUT" /tmp/launcher.applescript
 
-# 4. Copy custom_launcher content into the app bundle so it's self-contained
+# 4. Copy content into the app bundle so it's self-contained
 echo "[*] Including custom_launcher content in bundle..."
 mkdir -p "$APP_OUT/Contents/Resources"
+mkdir -p "$APP_OUT/Contents/Resources/build"
 cp -R "$LAUNCHER_DIR/" "$APP_OUT/Contents/Resources/"
-# Remove the build folder from the bundle to keep it clean
-rm -rf "$APP_OUT/Contents/Resources/build"
+# keep the patch file in the build folder
+cp "$BUILD_DIR/"*.patch "$APP_OUT/Contents/Resources/build/"
 
 # 5. Inject the WoW icon
 echo "[*] Injecting WoW icon..."
