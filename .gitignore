@@ -1,8 +1,6 @@
 .DS_Store
-.gitignore
 Launcher.db
 _classic_era_/
 Data/
-Launcher.db
 WoW Classic Launcher.app/
 custom_launcher/40618.conf
