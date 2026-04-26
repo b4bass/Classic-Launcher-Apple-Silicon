@@ -5,7 +5,6 @@ Extract the contents of the ZIP downloaded from this repository directly into yo
 ```bash
 tar xf Classic-Launcher-Apple-Silicon-main.zip --strip-components=1
 chmod +x custom_launcher/launch.sh
-./custom_launcher/launch.sh
 ```
 
 Your directory should look like this:
@@ -16,6 +15,12 @@ Game/
 ├── classic_era/
 ├── custom_launcher/  ← from this repo
 └── build/            ← from this repo
+```
+
+Manualy execute the launch script.
+
+```bash
+./custom_launcher/launch.sh
 ```
 
 When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS).
