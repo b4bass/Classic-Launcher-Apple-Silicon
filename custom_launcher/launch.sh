@@ -36,8 +36,9 @@ echo "========================================"
 
 # Handle --reset argument
 if [ "$1" == "--reset" ]; then
-    echo "[*] --reset flag detected. Clearing saved configuration..."
+    echo "[*] --reset flag detected. Clearing saved configuration and caches..."
     rm -f "$USER_CONF"
+    rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
 fi
 
 # 1. Remove quarantine attributes from all downloaded files
