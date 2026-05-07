@@ -107,14 +107,14 @@ else
     echo ""
 echo "========= Connection Method ========="
 echo "  Yes -> Realmlist via HermesProxy  (for vanilla/1.12 private servers)"
-echo "  No  -> Direct                     (server natively supports the 1.14 client)"
+echo "  No  -> Direct                     (for servers that natively supports WoW Classic client)"
 echo "====================================="
 read -p "Connect via HermesProxy? (yes/no): " USE_HERMES_INPUT
     
     # Matches y, Y, yes, Yes, YES, etc.
     if [[ "$USE_HERMES_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
         SAVED_USE_HERMES=true
-        read -p "Enter realmlist IP (Press Enter for default: 127.0.0.1): " INPUT_IP
+        read -p "Enter realmlist server address (Example: logon.example.com or 127.0.0.1): " INPUT_IP
         SAVED_IP=${INPUT_IP:-127.0.0.1}
     else
         SAVED_USE_HERMES=false
