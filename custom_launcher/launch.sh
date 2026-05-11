@@ -4,8 +4,9 @@
 # Path Definitions
 # ========================================
 LAUNCHER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ "$LAUNCHER_DIR" == *".app/Contents/Resources" ]]; then
-    BASE_DIR="$(dirname "$(dirname "$(dirname "$LAUNCHER_DIR")")")"
+if [[ "$LAUNCHER_DIR" == *".app/Contents/Resources"* ]]; then
+    BASE_DIR="$(dirname "$(dirname "$(dirname "$(dirname "$LAUNCHER_DIR")")")")"
+    RESOURCES_DIR="$(dirname "$LAUNCHER_DIR")"
 else
     BASE_DIR="$(dirname "$LAUNCHER_DIR")"
 fi
@@ -19,10 +20,13 @@ WOW_CONFIG="$WOW_WTF_DIR/Config.wtf"
 XPATCH_BIN="$LAUNCHER_DIR/xpatch3/bin/xpatch3"
 OPENSSL_DIR="$LAUNCHER_DIR/openssl-3.0.7"
 PATCH_FILE="$BASE_DIR/build/40618.patch"
+if [ -n "$RESOURCES_DIR" ] && [ -f "$RESOURCES_DIR/build/40618.patch" ]; then
+    PATCH_FILE="$RESOURCES_DIR/build/40618.patch"
+fi
 
-HERMES_DIR="$LAUNCHER_DIR/HermesProxy-MacOS-v3.10"
+HERMES_DIR="$LAUNCHER_DIR/HermesProxy-MacOS-v4.3.12"
 HERMES_BIN="$HERMES_DIR/HermesProxy"
-HERMES_CONF="$HERMES_DIR/HermesProxy.config"
+HERMES_CONF="$HERMES_DIR/appsettings.json"
 
 USER_CONF="$LAUNCHER_DIR/40618.conf"
 
@@ -39,6 +43,7 @@ if [ "$1" == "--reset" ]; then
     echo "[*] --reset flag detected. Clearing saved configuration and caches..."
     rm -f "$USER_CONF"
     rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
+    sed -i '' 's|\("Address"[[:space:]]*:[[:space:]]*"\)[^"]*\("\)|\1'"127.0.0.1"'\2|g' "$HERMES_CONF"
 fi
 
 # 1. Remove quarantine attributes from all downloaded files
@@ -114,7 +119,9 @@ read -p "Connect via HermesProxy? (yes/no): " USE_HERMES_INPUT
     # Matches y, Y, yes, Yes, YES, etc.
     if [[ "$USE_HERMES_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
         SAVED_USE_HERMES=true
-        read -p "Enter realmlist server address (Example: logon.example.com or 127.0.0.1): " INPUT_IP
+        read -p "Enter realmlist server address: " INPUT_IP
+
+    echo "Example: logon.example.com or 127.0.0.1"
         SAVED_IP=${INPUT_IP:-127.0.0.1}
     else
         SAVED_USE_HERMES=false
@@ -135,9 +142,10 @@ fi
 if [ "$SAVED_USE_HERMES" = true ]; then
     echo "[*] Configuring HermesProxy to point to $SAVED_IP..."
     if [ -f "$HERMES_CONF" ]; then
-        sed -i '' 's|<add key="ServerAddress" value="[^"]*" />|<add key="ServerAddress" value="'"$SAVED_IP"'" />|g' "$HERMES_CONF"
+        sed -i '' 's|\("Address"[[:space:]]*:[[:space:]]*"\)[^"]*\("\)|\1'"$SAVED_IP"'\2|g' "$HERMES_CONF"
+        sed -i '' 's|\("ClientBuild"[[:space:]]*:[[:space:]]*"\)[^"]*\("\)|\1'"V1_14_0_40618"'\2|g' "$HERMES_CONF"
     else
-        echo "Warning: HermesProxy.config not found at $HERMES_CONF"
+        echo "Warning: appsettings.json not found at $HERMES_CONF. Please re-download HermesProxy and ensure it is placed correctly."
     fi
 
     echo "[*] Configuring WoW to connect to HermesProxy (127.0.0.1)..."
