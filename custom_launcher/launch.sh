@@ -6,8 +6,10 @@
 LAUNCHER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "$LAUNCHER_DIR" == *".app/Contents/Resources" ]]; then
     BASE_DIR="$(dirname "$(dirname "$(dirname "$LAUNCHER_DIR")")")"
+    WITHIN_APP_MODE=true
 else
     BASE_DIR="$(dirname "$LAUNCHER_DIR")"
+    WITHIN_APP_MODE=false
 fi
 
 WOW_APP="$BASE_DIR/_classic_era_/World of Warcraft Classic.app"
@@ -16,11 +18,14 @@ WOW_BAK="${WOW_BIN}_bak"
 WOW_WTF_DIR="$BASE_DIR/_classic_era_/WTF"
 WOW_CONFIG="$WOW_WTF_DIR/Config.wtf"
 
-XPATCH_BIN="$LAUNCHER_DIR/xpatch3/bin/xpatch3"
+XDELTA_BIN="$LAUNCHER_DIR/xdelta3/bin/xdelta3"
 OPENSSL_DIR="$LAUNCHER_DIR/openssl-3.0.7"
 PATCH_FILE="$BASE_DIR/build/40618.patch"
+if [ $WITHIN_APP_MODE = true ]; then
+    PATCH_FILE="$LAUNCHER_DIR/build/40618.patch"
+fi
 
-HERMES_DIR="$LAUNCHER_DIR/HermesProxy-MacOS-v3.10"
+HERMES_DIR="$LAUNCHER_DIR/HermesProxy"
 HERMES_BIN="$HERMES_DIR/HermesProxy"
 HERMES_CONF="$HERMES_DIR/HermesProxy.config"
 
@@ -30,15 +35,38 @@ USER_CONF="$LAUNCHER_DIR/40618.conf"
 UNPATCHED_HASH="200c4c54316fb801d6d4d07d7031bb2b43f1c2be"
 PATCHED_HASH="eee46704fa257bb831f332d06e21064d9fee91b5"
 
-echo "========================================"
-echo "    WoW Classic 1.14.0 Patcher          "
-echo "========================================"
+if [ "$1" == "--checkpatch" ]; then
+    if [ -f "$WOW_BIN" ]; then
+        ACTUAL_HASH=$(shasum "$WOW_BIN" | awk '{print $1}')
+        if [ "$ACTUAL_HASH" == "$PATCHED_HASH" ]; then
+            echo "PATCHED"
+        elif [ "$ACTUAL_HASH" == "$UNPATCHED_HASH" ]; then
+            echo "UNPATCHED"
+        else
+            echo "ERROR"
+        fi
+    else
+        echo "ERROR"
+    fi
+    exit 0
+fi
+
+echo "===================================="
+echo "    WoW Classic 1.14.0 Patcher      "
+echo "===================================="
 
 # Handle --reset argument
+RESET_MODE=false
+PATCH_ONLY_MODE=false
 if [ "$1" == "--reset" ]; then
     echo "[*] --reset flag detected. Clearing saved configuration and caches..."
     rm -f "$USER_CONF"
     rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
+    sed -i '' 's|<add key="ServerAddress" value="[^"]*" />|<add key="ServerAddress" value="127.0.0.1" />|g' "$HERMES_CONF"
+    RESET_MODE=true
+elif [ "$1" == "--patch" ]; then
+    echo "[*] --patch flag detected. Ensuring binary is patched..."
+    PATCH_ONLY_MODE=true
 fi
 
 # 1. Remove quarantine attributes from all downloaded files
@@ -46,10 +74,10 @@ echo "[*] Removing Apple quarantine security attributes..."
 xattr -dr com.apple.quarantine "$BASE_DIR" 2>/dev/null
 
 # Ensure binaries are executable
-if [ ! -f "$XPATCH_BIN" ]; then
-    XPATCH_BIN="$LAUNCHER_DIR/xpatch3/bin/xdelta3"
+if [ ! -f "$XDELTA_BIN" ]; then
+    XDELTA_BIN="$LAUNCHER_DIR/xdelta3/bin/xdelta3"
 fi
-chmod +x "$WOW_BIN" "$XPATCH_BIN" "$HERMES_BIN" 2>/dev/null
+chmod +x "$WOW_BIN" "$XDELTA_BIN" "$HERMES_BIN" 2>/dev/null
 
 # 2. Check Backup and Patch status
 if [ ! -f "$WOW_BIN" ]; then
@@ -77,7 +105,7 @@ elif [ "$ACTUAL_HASH" == "$UNPATCHED_HASH" ]; then
 
     # Patch binary using the correct syntax: xdelta3 -d -f -s <ORIG> <PATCH> <OUT>
     echo "[*] Patching WoW binary..."
-    "$XPATCH_BIN" -d -f -s "$WOW_BAK" "$PATCH_FILE" "$WOW_BIN"
+    "$XDELTA_BIN" -d -f -s "$WOW_BAK" "$PATCH_FILE" "$WOW_BIN"
     
     if [ $? -eq 0 ]; then
         echo "[*] Patching successful!"
@@ -98,6 +126,13 @@ fi
 mkdir -p "$WOW_WTF_DIR"
 touch "$WOW_CONFIG"
 
+if [ "$RESET_MODE" = true ] || [ "$PATCH_ONLY_MODE" = true ]; then
+    if [ "$PATCH_ONLY_MODE" = true ]; then
+        echo "[*] Patch check completed successfully."
+    fi
+    exit 0
+fi
+
 # 3. Handle User Configuration
 if [ -f "$USER_CONF" ]; then
     echo "[*] Loading saved configuration from 40618.conf..."
@@ -106,23 +141,22 @@ else
     # Ask user for settings and save them
     echo ""
 echo "========= Connection Method ========="
-echo "  Yes -> Realmlist via HermesProxy  (for vanilla/1.12 private servers)"
+echo "  [Yes] -> Realmlist via HermesProxy (for vanilla/1.12 private servers)"
 echo "  No  -> Direct                     (for servers that natively supports WoW Classic client)"
 echo "====================================="
-read -p "Connect via HermesProxy? (yes/no): " USE_HERMES_INPUT
+read -p "Connect via HermesProxy? [Y/n]: " USE_HERMES_INPUT
     
-    # Matches y, Y, yes, Yes, YES, etc.
-    if [[ "$USE_HERMES_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+    # Matches y, Y, yes, Yes, or empty string (defaults to Yes)
+    if [[ -z "$USE_HERMES_INPUT" ]] || [[ "$USE_HERMES_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
         SAVED_USE_HERMES=true
-        read -p "Enter realmlist server address (Example: logon.example.com or 127.0.0.1): " INPUT_IP
+        read -p "Enter realmlist server address: " INPUT_IP
+
+    echo "Example: logon.example.com or 127.0.0.1"
         SAVED_IP=${INPUT_IP:-127.0.0.1}
     else
         SAVED_USE_HERMES=false
-        read -p "Enter bnetserver IP (e.g. your private server IP): " SAVED_IP
-        if [ -z "$SAVED_IP" ]; then
-            echo "Error: IP cannot be empty for direct connection."
-            exit 1
-        fi
+        read -p "Enter bnetserver IP (e.g. your private server IP): " INPUT_IP
+        SAVED_IP=${INPUT_IP:-127.0.0.1}
     fi
     
     # Save to file
@@ -137,7 +171,7 @@ if [ "$SAVED_USE_HERMES" = true ]; then
     if [ -f "$HERMES_CONF" ]; then
         sed -i '' 's|<add key="ServerAddress" value="[^"]*" />|<add key="ServerAddress" value="'"$SAVED_IP"'" />|g' "$HERMES_CONF"
     else
-        echo "Warning: HermesProxy.config not found at $HERMES_CONF"
+        echo "Warning: HermesProxy.config not found at $HERMES_CONF. Please re-download HermesProxy and ensure it is placed correctly."
     fi
 
     echo "[*] Configuring WoW to connect to HermesProxy (127.0.0.1)..."
@@ -164,7 +198,7 @@ killall HermesProxy 2>/dev/null
 sleep 1
 
 echo "[*] Launching World of Warcraft Classic..."
-"$WOW_BIN" > /dev/null 2>&1 &
+nohup "$WOW_BIN" > /dev/null 2>&1 &
 
 if [ "$LAUNCH_HERMES" = true ]; then
     echo "[*] HermesProxy running in this terminal (close it to stop HermesProxy)..."
