@@ -19,14 +19,10 @@ Game/
 
 Manualy execute the launch script.
 
+When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS).
 ```bash
 ./custom_launcher/launch.sh
 ```
-
-When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS).
-
-<br/>
-<br/>
 
 Patcher applies `40618.patch` to the Apple Silicon (ARM) build of the Classic 1.14.0 (40618) binary using xdelta3.
 
@@ -38,7 +34,17 @@ If you have quarantine issues, you may need to manually allow the app to run in 
 ```bash
 sudo xattr -cr custom_launcher/
 ```
-You can verify that the client is properly patched.
+If you encounter a CAS system error, delete your Cache folder or reset the configuration.
+
+<br />
+
+### Usage
+To only patch the game. 
+
+```bash
+./custom_launcher/launch.sh --patch
+```
+To verify that the client is properly patched.
 
 ```bash
 ./custom_launcher/launch.sh --checkpatch
@@ -48,8 +54,6 @@ To reset configuration.
 ```bash
 ./custom_launcher/launch.sh --reset
 ```
-If you encounter a CAS system error, delete your Cache folder or reset the configuration.
-
 <br/>
 
 ### Classic Launcher.app Compilation (Optional)
