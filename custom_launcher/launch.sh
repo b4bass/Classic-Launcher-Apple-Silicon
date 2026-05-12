@@ -25,9 +25,10 @@ if [ $WITHIN_APP_MODE = true ]; then
     PATCH_FILE="$LAUNCHER_DIR/build/40618.patch"
 fi
 
-HERMES_DIR="$LAUNCHER_DIR/HermesProxy"
-HERMES_BIN="$HERMES_DIR/HermesProxy"
-HERMES_CONF="$HERMES_DIR/HermesProxy.config"
+PROXY_DIR="$LAUNCHER_DIR/Proxy"
+PROXY_BIN="$PROXY_DIR/HermesProxy"
+PROXY_CONF="$PROXY_DIR/HermesProxy.config"
+PROXY_PROC_NAME=$(basename "$PROXY_BIN")
 
 USER_CONF="$LAUNCHER_DIR/40618.conf"
 
@@ -62,7 +63,9 @@ if [ "$1" == "--reset" ]; then
     echo "[*] --reset flag detected. Clearing saved configuration and caches..."
     rm -f "$USER_CONF"
     rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
-    sed -i '' 's|<add key="ServerAddress" value="[^"]*" />|<add key="ServerAddress" value="127.0.0.1" />|g' "$HERMES_CONF"
+    if [ -f "$PROXY_CONF" ]; then
+        sed -i '' 's|<add key="ServerAddress" value="[^"]*" />|<add key="ServerAddress" value="127.0.0.1" />|g' "$PROXY_CONF"
+    fi
     RESET_MODE=true
 elif [ "$1" == "--patch" ]; then
     echo "[*] --patch flag detected. Ensuring binary is patched..."
@@ -74,10 +77,7 @@ echo "[*] Removing Apple quarantine security attributes..."
 xattr -dr com.apple.quarantine "$BASE_DIR" 2>/dev/null
 
 # Ensure binaries are executable
-if [ ! -f "$XDELTA_BIN" ]; then
-    XDELTA_BIN="$LAUNCHER_DIR/xdelta3/bin/xdelta3"
-fi
-chmod +x "$WOW_BIN" "$XDELTA_BIN" "$HERMES_BIN" 2>/dev/null
+chmod +x "$WOW_BIN" "$XDELTA_BIN" "$PROXY_BIN" 2>/dev/null
 
 # 2. Check Backup and Patch status
 if [ ! -f "$WOW_BIN" ]; then
@@ -140,48 +140,47 @@ if [ -f "$USER_CONF" ]; then
 else
     # Ask user for settings and save them
     echo ""
-echo "========= Connection Method ========="
-echo "  [Yes] -> Realmlist via HermesProxy (for vanilla/1.12 private servers)"
-echo "   No   -> Direct                    (for servers with native WoW Classic client support)"
-echo "====================================="
-read -p "Connect via HermesProxy? [Y/n]: " USE_HERMES_INPUT
+    echo "========= Connection Method ========="
+    echo "  [Yes] -> via Connection Proxy      (for legacy/private servers)"
+    echo "   No   -> Direct                    (for servers with native client support)"
+    echo "====================================="
+    read -p "Connect via Connection Proxy? [Y/n]: " USE_PROXY_INPUT
     
     # Matches y, Y, yes, Yes, or empty string (defaults to Yes)
-    if [[ -z "$USE_HERMES_INPUT" ]] || [[ "$USE_HERMES_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-        SAVED_USE_HERMES=true
+    if [[ -z "$USE_PROXY_INPUT" ]] || [[ "$USE_PROXY_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        SAVED_USE_PROXY=true
+        echo "Example: logon.example.com or 127.0.0.1"
         read -p "Enter realmlist server address: " INPUT_IP
-
-    echo "Example: logon.example.com or 127.0.0.1"
         SAVED_IP=${INPUT_IP:-127.0.0.1}
     else
-        SAVED_USE_HERMES=false
-        read -p "Enter bnetserver IP (e.g. your private server IP): " INPUT_IP
+        SAVED_USE_PROXY=false
+        read -p "Enter bnetserver IP: " INPUT_IP
         SAVED_IP=${INPUT_IP:-127.0.0.1}
     fi
     
     # Save to file
-    echo "SAVED_USE_HERMES=$SAVED_USE_HERMES" > "$USER_CONF"
+    echo "SAVED_USE_PROXY=$SAVED_USE_PROXY" > "$USER_CONF"
     echo "SAVED_IP=\"$SAVED_IP\"" >> "$USER_CONF"
     echo "[*] Settings saved to 40618.conf. Use ./patcher.sh --reset to change them later."
 fi
 
 # Apply the loaded/saved configuration
-if [ "$SAVED_USE_HERMES" = true ]; then
-    echo "[*] Configuring HermesProxy to point to $SAVED_IP..."
-    if [ -f "$HERMES_CONF" ]; then
-        sed -i '' 's|<add key="ServerAddress" value="[^"]*" />|<add key="ServerAddress" value="'"$SAVED_IP"'" />|g' "$HERMES_CONF"
+if [ "$SAVED_USE_PROXY" = true ]; then
+    echo "[*] Configuring Connection Proxy to point to $SAVED_IP..."
+    if [ -f "$PROXY_CONF" ]; then
+        sed -i '' 's|<add key="ServerAddress" value="[^"]*" />|<add key="ServerAddress" value="'"$SAVED_IP"'" />|g' "$PROXY_CONF"
     else
-        echo "Warning: HermesProxy.config not found at $HERMES_CONF. Please re-download HermesProxy and ensure it is placed correctly."
+        echo "Warning: Proxy configuration not found at $PROXY_CONF."
     fi
 
-    echo "[*] Configuring WoW to connect to HermesProxy (127.0.0.1)..."
+    echo "[*] Configuring WoW to connect to local Proxy (127.0.0.1)..."
     if grep -q "^SET portal" "$WOW_CONFIG"; then
         sed -i '' 's/^SET portal.*/SET portal "127.0.0.1"/g' "$WOW_CONFIG"
     else
         echo 'SET portal "127.0.0.1"' >> "$WOW_CONFIG"
     fi
 
-    LAUNCH_HERMES=true
+    LAUNCH_PROXY=true
 else
     echo "[*] Configuring WoW to connect directly to $SAVED_IP..."
     if grep -q "^SET portal" "$WOW_CONFIG"; then
@@ -190,22 +189,23 @@ else
         echo "SET portal \"$SAVED_IP\"" >> "$WOW_CONFIG"
     fi
 
-    LAUNCH_HERMES=false
+    LAUNCH_PROXY=false
 fi
 
 # 4. Execution Phase
-killall HermesProxy 2>/dev/null
+killall "$PROXY_PROC_NAME" 2>/dev/null
 sleep 1
 
 echo "[*] Launching World of Warcraft Classic..."
 nohup "$WOW_BIN" > /dev/null 2>&1 &
 
-if [ "$LAUNCH_HERMES" = true ]; then
-    echo "[*] HermesProxy running in this terminal (close it to stop HermesProxy)..."
+if [ "$LAUNCH_PROXY" = true ]; then
+    echo "[*] Connection Proxy running in this terminal (close it to stop proxy)..."
     echo "========================================"
-    cd "$HERMES_DIR"
+    cd "$PROXY_DIR"
     export DYLD_LIBRARY_PATH="$OPENSSL_DIR"
-    ./HermesProxy
+    # Execute
+    "$PROXY_BIN"
 else
     echo "[*] Done! You can close this terminal."
 fi
