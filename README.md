@@ -38,6 +38,11 @@ If you have quarantine issues, you may need to manually allow the app to run in 
 ```bash
 sudo xattr -cr custom_launcher/
 ```
+You can verify that the client is properly patched.
+
+```bash
+./custom_launcher/launch.sh --checkpatch
+```
 To reset configuration.
 
 ```bash
