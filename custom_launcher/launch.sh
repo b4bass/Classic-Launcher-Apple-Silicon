@@ -142,7 +142,7 @@ else
     echo ""
 echo "========= Connection Method ========="
 echo "  [Yes] -> Realmlist via HermesProxy (for vanilla/1.12 private servers)"
-echo "  No  -> Direct                     (for servers that natively supports WoW Classic client)"
+echo "   No   -> Direct                    (for servers with native WoW Classic client support)"
 echo "====================================="
 read -p "Connect via HermesProxy? [Y/n]: " USE_HERMES_INPUT
     
