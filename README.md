@@ -102,5 +102,5 @@ chmod +x build/build_launcher.sh
 <br/>
 <br/>
 
-Credits:  [0Blu](https://github.com/0Blu)   [Arctium](https://github.com/Arctium)
+Credits:  [0Blu](https://github.com/0Blu)   [Arctium](https://github.com/Arctium)   [Xian55](https://github.com/Xian55)
 <br/>
