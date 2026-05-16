@@ -43,17 +43,17 @@ If you encounter a CAS system error, delete your Cache folder or reset the confi
 To only patch the game. 
 
 ```bash
-./custom_launcher/launch.sh --patch
+launch.sh --patch
 ```
 To verify that the client is properly patched.
 
 ```bash
-./custom_launcher/launch.sh --checkpatch
+launch.sh --checkpatch
 ```
 To reset configuration.
 
 ```bash
-./custom_launcher/launch.sh --reset
+launch.sh --reset
 ```
 <br />
 
@@ -62,32 +62,32 @@ To reset configuration.
 To use a custom proxy executable located in the `proxy` folder instead of the default.
 
 ```bash
-./custom_launcher/launch.sh --switchproxy MyProxy
+launch.sh --switchproxy MyProxy
 ```
 
 To pass dynamic override arguments to HermesProxy (e.g., overriding the server address).
 
 ```bash
-./custom_launcher/launch.sh --set ServerAddress=logon.example.com
+launch.sh --set ServerAddress=logon.example.com
 ```
 
 You can also chain arguments together:
 
 ```bash
-./custom_launcher/launch.sh --switchproxy MyProxy --set ServerAddress=127.0.0.1 --set LogLevel=Debug
+launch.sh --switchproxy MyProxy --set ServerAddress=127.0.0.1 --set LogLevel=Debug
 
 ```
 
 To specify a custom proxy configuration file.
 
 ```bash
-./custom_launcher/launch.sh --config /path/to/proxy.config
+launch.sh --config /path/to/proxy.config
 ```
 
 To force a direct connection (bypasses proxy entirely).
 
 ```bash
-./custom_launcher/launch.sh --bnet 127.0.0.1
+launch.sh --bnet 127.0.0.1
 ```
 
 <br/>
