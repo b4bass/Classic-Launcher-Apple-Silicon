@@ -238,7 +238,6 @@ elif [ "$PROXY_ARGS_PASSED" = true ]; then
 # If normal run (No overriding arguments)
 else
     if [ "$CONFIG_EXISTS" = true ]; then
-        echo "[*] Loading saved configuration from 40618.conf..."
         if [ "$SAVED_USE_PROXY" = true ]; then CONNECTION_MODE="PROXY"
         else
             CONNECTION_MODE="DIRECT"
@@ -358,7 +357,7 @@ if [ "$LAUNCH_PROXY" = true ]; then
     
     cd "$PROXY_DIR"
     export DYLD_LIBRARY_PATH="$OPENSSL_DIR"
-    # Execute  
+    # Execute
     "${FULL_PROXY_CMD[@]}"
 else
     echo "[*] Done! You can close this terminal."

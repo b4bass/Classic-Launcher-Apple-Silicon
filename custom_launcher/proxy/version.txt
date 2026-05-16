@@ -1,2 +1,2 @@
-https://github.com/WowLegacyCore/HermesProxy
-Release v3.10
+https://github.com/Xian55/HermesProxy
+Release v4.3.16 (2026-05-15)
