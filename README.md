@@ -1,6 +1,8 @@
 
 # Classic-Launcher-Apple-Silicon
 
+> **Help needed:** support for the 1.14.2 client — see [#9](https://github.com/b4bass/Classic-Launcher-Apple-Silicon/issues/9).
+
 Extract the contents of the ZIP downloaded from this repository directly into your game directory.
 
 ```bash
