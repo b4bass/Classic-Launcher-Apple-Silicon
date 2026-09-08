@@ -1,5 +1,6 @@
-
 # Classic-Launcher-Apple-Silicon
+
+Patches and launches the native Apple Silicon build of Classic 1.14.0, connecting to Vanilla 1.12 realms.
 
 > **Help needed:** support for the 1.14.2 client — see [#9](https://github.com/b4bass/Classic-Launcher-Apple-Silicon/issues/9).
 
@@ -15,48 +16,57 @@ Your directory should look like this:
 ```text
 Game/
 ├── Data/
-├── classic_era/
+├── _classic_era_/
 ├── custom_launcher/  ← from this repo
 └── build/            ← from this repo
 ```
 
-Manualy execute the launch script.
+Manually execute the launch script.
 
 When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS).
+
 ```bash
 ./custom_launcher/launch.sh
 ```
 
-Patcher applies `40618.patch` to the Apple Silicon (ARM) build of the Classic 1.14.0 (40618) binary using xdelta3.
+Patcher applies `40618.patch` — an xdelta binary diff — to the original Classic 1.14.0 (40618) client, enabling Apple Silicon (ARM) custom servers support.
 
-```bash
-shasum 200c4c54316fb801d6d4d07d7031bb2b43f1c2be
-```
 If you have quarantine issues, you may need to manually allow the app to run in Gatekeeper.
 
 ```bash
 sudo xattr -cr custom_launcher/
 ```
+
 If you encounter a CAS system error, delete your Cache folder or reset the configuration.
 
 <br />
 
 ### Usage
-To only patch the game. 
+
+To only patch the game.
 
 ```bash
 launch.sh --patch
 ```
-To verify that the client is properly patched.
+
+To verify that the client is properly patched (unpatched hash: `200c4c54316fb801d6d4d07d7031bb2b43f1c2be`).
 
 ```bash
 launch.sh --checkpatch
 ```
+
 To reset configuration.
 
 ```bash
 launch.sh --reset
 ```
+
+To list all available options.
+
+```bash
+launch.sh --help
+```
+
 <br />
 
 #### Advanced Connection & Proxy Options
@@ -77,7 +87,6 @@ You can also chain arguments together:
 
 ```bash
 launch.sh --switchproxy MyProxy --set ServerAddress=127.0.0.1 --set LogLevel=Debug
-
 ```
 
 To specify a custom proxy configuration file.
@@ -92,7 +101,7 @@ To force a direct connection (bypasses proxy entirely).
 launch.sh --bnet 127.0.0.1
 ```
 
-<br/>
+<br />
 
 ### Classic Launcher.app Compilation (Optional)
 
@@ -101,8 +110,8 @@ chmod +x build/build_launcher.sh
 ./build/build_launcher.sh
 ```
 
-<br/>
-<br/>
+<br />
+<br />
 
 Credits:  [0Blu](https://github.com/0Blu)   [Arctium](https://github.com/Arctium)   [Xian55](https://github.com/Xian55)
-<br/>
+<br />
