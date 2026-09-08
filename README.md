@@ -1,8 +1,10 @@
 # Classic-Launcher-Apple-Silicon
 
-Patches and launches the native Apple Silicon build of Classic 1.14.0, connecting to Vanilla 1.12 realms.
+Patches and launches the native Apple Silicon (ARM) build of Classic 1.14.0, connecting to Vanilla 1.12 realms.
 
 > **Help needed:** support for the 1.14.2 client — see [#9](https://github.com/b4bass/Classic-Launcher-Apple-Silicon/issues/9).
+
+<br />
 
 Extract the contents of the ZIP downloaded from this repository directly into your game directory.
 
@@ -23,13 +25,15 @@ Game/
 
 Manually execute the launch script.
 
-When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS).
-
 ```bash
 ./custom_launcher/launch.sh
 ```
 
-Patcher applies `40618.patch` — an xdelta binary diff — to the original Classic 1.14.0 (40618) client, enabling Apple Silicon (ARM) custom servers support.
+When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS).
+
+Patcher applies `40618.patch` — an xdelta binary diff — to the original Classic 1.14.0 (40618) client
+<br />
+It expects the unpatched checksum: `200c4c54316fb801d6d4d07d7031bb2b43f1c2be`
 
 If you have quarantine issues, you may need to manually allow the app to run in Gatekeeper.
 
@@ -49,7 +53,7 @@ To only patch the game.
 launch.sh --patch
 ```
 
-To verify that the client is properly patched (unpatched hash: `200c4c54316fb801d6d4d07d7031bb2b43f1c2be`).
+To verify that the client is properly patched.
 
 ```bash
 launch.sh --checkpatch
