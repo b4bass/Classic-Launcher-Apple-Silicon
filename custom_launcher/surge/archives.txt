@@ -2,4 +2,3 @@
 # One URL per line. Add another line to offer it as an extra mirror choice.
 # Lines starting with # are comments and are ignored.
 https://archive.org/download/wow-classic-1.14.0.40618-macos/WoW_Classic_1.14.0.40618_macOS.zip
-https://archive.org/download/wow-classic-1.14.0.40618-macos/this-file-does-not-exist-40618.zip
