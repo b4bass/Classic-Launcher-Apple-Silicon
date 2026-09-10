@@ -73,7 +73,7 @@ launch.sh --help
 
 <br />
 
-#### Advanced Connection & Proxy Options
+### Proxy Options
 
 To use a custom proxy executable located in the `proxy` folder instead of the default.
 
