@@ -31,10 +31,11 @@ Manually execute the launch script.
 
 When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS).
 
-Patcher applies `40618.patch` — an xdelta binary diff — to the original Classic 1.14.0 (40618) client
-<br />
+Patcher applies `40618.patch` — an delta binary diff — to the original Classic 1.14.0 (40618) client.
+
 It expects the unpatched sha checksum: `200c4c54316fb801d6d4d07d7031bb2b43f1c2be`
 
+<br />
 If you have quarantine issues, you may need to manually allow the app to run in Gatekeeper.
 
 ```bash
@@ -63,6 +64,12 @@ To reset configuration.
 
 ```bash
 launch.sh --reset
+```
+
+To fetch missing files.
+
+```bash
+launch.sh --dl
 ```
 
 To list all available options.
