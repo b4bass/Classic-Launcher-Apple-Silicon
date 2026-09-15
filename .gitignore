@@ -3,6 +3,11 @@ Launcher.db
 dev/
 _classic_era_/
 Data/
+.build.info
+.patch.result
 WoW Classic Launcher.app/
 custom_launcher/40618.conf
 custom_launcher/proxy/appsettings.Development.json
+custom_launcher/proxy/AccountData/
+custom_launcher/proxy/Logs/
+custom_launcher/proxy/PacketsLog/

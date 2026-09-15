@@ -60,7 +60,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --checkpatch           Print PATCHED, UNPATCHED, or ERROR, and exit"
             echo "  --patch                Patch the binary only, don't launch"
             echo "  --reset                Clear saved connection config and caches"
-            echo "  --dl [url]             Fetch an untouched 1.14.0 client (prompts for a mirror if no url given)"
+            echo "  --getmissing [url]     Fetch an untouched 40618 client (prompts for a mirror if no url given)"
             echo "  --bnet [ip]            Connect directly, bypassing the proxy (default ip: 127.0.0.1)"
             echo "  --switchproxy <name>   Use a custom proxy binary from the proxy/ folder"
             echo "  --config <file>        Pass a custom proxy configuration file"
@@ -91,7 +91,7 @@ while [[ "$#" -gt 0 ]]; do
             PATCH_ONLY_MODE=true
             shift
             ;;
-        --dl)
+        --getmissing)
             GET_MODE=true
             if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
                 GET_URL_ARG="$2"
@@ -152,10 +152,10 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 # --- Get Mode ---
-if [ "$GET_MODE" = true ]; then
-    echo "===================================="
-    echo "     WoW Classic 1.14.0 - Get       "
-    echo "===================================="
+run_get_client() {
+    echo "======================================="
+    echo "       WoW Classic 1.14.0 - Get        "
+    echo "======================================="
 
     if [ ! -f "$SURGE_BIN" ]; then
         echo "Error: required binary not found at $SURGE_BIN" >&2
@@ -164,10 +164,10 @@ if [ "$GET_MODE" = true ]; then
     fi
     chmod +x "$SURGE_BIN" 2>/dev/null
 
-    if [ -d "$BASE_DIR/_classic_era_" ] || [ -d "$BASE_DIR/Data" ]; then
-        echo "Error: '_classic_era_' or 'Data' already exists in $BASE_DIR." >&2
-        echo "--dl is only for an initial, empty install. Remove/move the" >&2
-        echo "existing client first if you really want to fetch it again." >&2
+    if [ -f "$WOW_BIN" ]; then
+        echo "Error: a client already exists at $WOW_BIN" >&2
+        echo "--getmissing is only for an initial, empty install. Remove it first" >&2
+        echo "if you really want to fetch it again." >&2
         exit 1
     fi
 
@@ -267,16 +267,20 @@ if [ "$GET_MODE" = true ]; then
     fi
 
     echo "[*] Installing client into $BASE_DIR..."
-    rsync -a "$EXTRACTED_ROOT"/ "$BASE_DIR"/
+    ditto "$EXTRACTED_ROOT" "$BASE_DIR"
 
     echo "[*] Client fetched and installed."
     echo "    Run ./custom_launcher/launch.sh to patch and connect."
     exit 0
+}
+
+if [ "$GET_MODE" = true ]; then
+    run_get_client
 fi
 
-echo "===================================="
-echo "    WoW Classic 1.14.0 Patcher      "
-echo "===================================="
+echo "======================================="
+echo "     WoW Classic 1.14.0 - Patcher      "
+echo "======================================="
 
 # 1. Remove quarantine attributes from all downloaded files
 echo "[*] Removing Apple quarantine security attributes..."
@@ -288,6 +292,15 @@ chmod +x "$WOW_BIN" "$XDELTA_BIN" "$PROXY_BIN" 2>/dev/null
 # 2. Check Backup and Patch status
 if [ ! -f "$WOW_BIN" ]; then
     echo "Error: WoW binary not found at $WOW_BIN"
+    echo ""
+    echo "====== Get missing client files ======="
+    echo "  [Yes] -> Fetch the 40618 client"
+    echo "   No   -> Exit, fetch it manually later"
+    echo "======================================="
+    read -p "Fetch the 40618 client now? [Y/n]: " GET_MISSING_INPUT
+    if [[ -z "$GET_MISSING_INPUT" ]] || [[ "$GET_MISSING_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        run_get_client
+    fi
     exit 1
 fi
 
@@ -317,10 +330,10 @@ elif [ "$ACTUAL_HASH" == "$UNPATCHED_HASH" ]; then
         exit 1
     fi
 else
-    echo "error : patcher is expecting WoW Classic 1.14.0 (40618)"
-    echo "Current file hash is : $ACTUAL_HASH"
-    echo "Expected unpatched   : $UNPATCHED_HASH"
-    echo "Expected patched     : $PATCHED_HASH"
+    echo "Error: patcher is expecting WoW Classic 1.14.0 (40618)"
+    echo "Current file hash: $ACTUAL_HASH"
+    echo "Expected unpatched: $UNPATCHED_HASH"
+    echo "Expected patched: $PATCHED_HASH"
     exit 1
 fi
 
@@ -396,10 +409,10 @@ else
         fi
     else
         echo ""
-        echo "========= Connection Method ========="
-        echo "  [Yes] -> via Connection Proxy      (for legacy/private servers)"
-        echo "   No   -> Direct                    (for servers with native client support)"
-        echo "====================================="
+        echo "========== Connection Method =========="
+        echo "  [Yes] -> via Connection Proxy  (for legacy/private servers)"
+        echo "   No   -> Direct                (for servers with native client support)"
+        echo "======================================="
         read -p "Connect via Connection Proxy? [Y/n]: " USE_PROXY_INPUT
 
         # Matches y, Y, yes, Yes, or empty string (defaults to Yes)
@@ -505,7 +518,7 @@ if [ "$LAUNCH_PROXY" = true ]; then
 
     echo "Executing proxy command: ${FULL_PROXY_CMD[*]}"
     echo "[*] Connection Proxy running in this terminal (close it to stop proxy)..."
-    echo "========================================"
+    echo "======================================="
 
     cd "$PROXY_DIR"
     export DYLD_LIBRARY_PATH="$OPENSSL_DIR"

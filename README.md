@@ -69,7 +69,7 @@ launch.sh --reset
 To fetch missing files.
 
 ```bash
-launch.sh --dl
+launch.sh --getmissing
 ```
 
 To list all available options.
