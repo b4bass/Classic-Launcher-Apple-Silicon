@@ -43,6 +43,9 @@ cp -R "$LAUNCHER_DIR/" "$APP_OUT/Contents/Resources/"
 # keep the patch file in the build folder
 cp "$BUILD_DIR/"*.patch "$APP_OUT/Contents/Resources/build/"
 
+# Drop Finder metadata junk - never useful, never wanted
+find "$APP_OUT/Contents/Resources" -name ".DS_Store" -delete
+
 # 5. Inject the WoW icon
 echo "[*] Injecting WoW icon..."
 cp "$ICON_ICNS" "$APP_OUT/Contents/Resources/wow.icns"
