@@ -46,17 +46,69 @@ cp "$BUILD_DIR/"*.patch "$APP_OUT/Contents/Resources/build/"
 # Drop Finder metadata junk - never useful, never wanted
 find "$APP_OUT/Contents/Resources" -name ".DS_Store" -delete
 
-# 5. Inject the WoW icon
+# 5. Give the app its own version of the part of launch.sh marked
+# BUILD:WITHIN_APP - reuse a running proxy silently, stop it when the
+# game closes, and close this window once there's nothing left to show
+LAUNCH_SH="$APP_OUT/Contents/Resources/launch.sh"
+WITHIN_APP_BLOCK="/tmp/launch_within_app.sh"
+cat > "$WITHIN_APP_BLOCK" << 'EOF'
+proxy_already_running() {
+    echo "[*] Reusing existing proxy."
+    START_PROXY=false
+}
+
+announce_proxy_started() {
+    echo "[*] Connection Proxy running..."
+}
+
+after_game_launched() {
+    close_window
+}
+
+on_game_closed() {
+    kill -INT $$ 2>/dev/null
+    while kill -0 $$ 2>/dev/null; do
+        sleep 1
+    done
+    close_window
+}
+
+# Terminal won't close a window with a foreground process still running
+close_window() {
+    local current_tty
+    current_tty="$(tty)"
+    (
+        sleep 1
+        osascript -e "
+        tell application \"Terminal\"
+            repeat with w in windows
+                if (tty of (first tab of w)) is equal to \"$current_tty\" then
+                    close w
+                end if
+            end repeat
+        end tell
+        " > /dev/null 2>&1
+    ) & disown
+}
+EOF
+
+awk -v block="$WITHIN_APP_BLOCK" '
+    /# BUILD:WITHIN_APP_BEGIN/ { print; while ((getline line < block) > 0) print line; skip=1; next }
+    /# BUILD:WITHIN_APP_END/   { skip=0 }
+    !skip
+' "$LAUNCH_SH" > "$LAUNCH_SH.new" && mv "$LAUNCH_SH.new" "$LAUNCH_SH"
+
+# 6. Inject the WoW icon
 echo "[*] Injecting WoW icon..."
 cp "$ICON_ICNS" "$APP_OUT/Contents/Resources/wow.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile wow" "$APP_OUT/Contents/Info.plist" 2>/dev/null || \
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string wow" "$APP_OUT/Contents/Info.plist"
 
-# 6. Re-sign after modifying the bundle
+# 7. Re-sign after modifying the bundle
 echo "[*] Re-signing..."
 codesign -f -s - "$APP_OUT"
 
 # Clean up
-rm -rf "$ICONSET" "$ICON_ICNS" /tmp/launcher.applescript
+rm -rf "$ICONSET" "$ICON_ICNS" /tmp/launcher.applescript "$WITHIN_APP_BLOCK"
 
 echo "[*] Done! $APP_NAME.app is ready."
