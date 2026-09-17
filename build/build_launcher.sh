@@ -46,9 +46,7 @@ cp "$BUILD_DIR/"*.patch "$APP_OUT/Contents/Resources/build/"
 # Drop Finder metadata junk - never useful, never wanted
 find "$APP_OUT/Contents/Resources" -name ".DS_Store" -delete
 
-# 5. Give the app its own version of the part of launch.sh marked
-# BUILD:WITHIN_APP - reuse a running proxy silently, stop it when the
-# game closes, and close this window once there's nothing left to show
+# 5. Swap in the app's own proxy/window behavior
 LAUNCH_SH="$APP_OUT/Contents/Resources/launch.sh"
 WITHIN_APP_BLOCK="/tmp/launch_within_app.sh"
 cat > "$WITHIN_APP_BLOCK" << 'EOF'
@@ -97,6 +95,9 @@ awk -v block="$WITHIN_APP_BLOCK" '
     /# BUILD:WITHIN_APP_END/   { skip=0 }
     !skip
 ' "$LAUNCH_SH" > "$LAUNCH_SH.new" && mv "$LAUNCH_SH.new" "$LAUNCH_SH"
+
+# Warn if the markers weren't found - app just gets regular launch.sh behavior
+grep -q "^close_window()" "$LAUNCH_SH" || echo "[!] BUILD:WITHIN_APP markers not found in launch.sh."
 
 # 6. Inject the WoW icon
 echo "[*] Injecting WoW icon..."
