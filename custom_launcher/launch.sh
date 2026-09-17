@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # --- Global State Defaults ---
-WITHIN_APP_MODE=false
-RESET_MODE=false
-PATCH_ONLY_MODE=false
-GET_MODE=false
+WITHIN_APP=false
+RESET=false
+PATCH_ONLY=false
+GET_MISSING=false
 CONFIG_EXISTS=false
 PROXY_ARGS_PASSED=false
 SAVED_USE_PROXY=false
@@ -14,7 +14,7 @@ LAUNCH_PROXY=false
 LAUNCHER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "$LAUNCHER_DIR" == *".app/Contents/Resources" ]]; then
     BASE_DIR="$(dirname "$(dirname "$(dirname "$LAUNCHER_DIR")")")"
-    WITHIN_APP_MODE=true
+    WITHIN_APP=true
 else
     BASE_DIR="$(dirname "$LAUNCHER_DIR")"
 fi
@@ -28,7 +28,7 @@ WOW_CONFIG="$WOW_WTF_DIR/Config.wtf"
 XDELTA_BIN="$LAUNCHER_DIR/xdelta3/bin/xdelta3"
 OPENSSL_DIR="$LAUNCHER_DIR/openssl-3.0.7"
 PATCH_FILE="$BASE_DIR/build/40618.patch"
-if [ "$WITHIN_APP_MODE" = true ]; then
+if [ "$WITHIN_APP" = true ]; then
     PATCH_FILE="$LAUNCHER_DIR/build/40618.patch"
 fi
 
@@ -43,7 +43,7 @@ UNPATCHED_HASH="200c4c54316fb801d6d4d07d7031bb2b43f1c2be"
 PATCHED_HASH="eee46704fa257bb831f332d06e21064d9fee91b5"
 
 # --- Argument Parsing ---
-CONNECTION_MODE=""
+CONNECTION_TYPE=""
 DIRECT_BNET_IP=""
 CUSTOM_PROXY_BIN=""
 PROXY_CONFIG_FILE=""
@@ -84,15 +84,15 @@ while [[ "$#" -gt 0 ]]; do
             exit 0
             ;;
         --reset)
-            RESET_MODE=true
+            RESET=true
             shift
             ;;
         --patch)
-            PATCH_ONLY_MODE=true
+            PATCH_ONLY=true
             shift
             ;;
         --getmissing)
-            GET_MODE=true
+            GET_MISSING=true
             if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
                 GET_URL_ARG="$2"
                 shift 2
@@ -274,7 +274,7 @@ run_get_client() {
     exit 0
 }
 
-if [ "$GET_MODE" = true ]; then
+if [ "$GET_MISSING" = true ]; then
     run_get_client
 fi
 
@@ -341,8 +341,8 @@ fi
 mkdir -p "$WOW_WTF_DIR"
 touch "$WOW_CONFIG"
 
-if [ "$RESET_MODE" = true ] || [ "$PATCH_ONLY_MODE" = true ]; then
-    if [ "$RESET_MODE" = true ]; then
+if [ "$RESET" = true ] || [ "$PATCH_ONLY" = true ]; then
+    if [ "$RESET" = true ]; then
         echo "[*] --reset flag detected. Clearing saved configuration, caches..."
         rm -f "$USER_CONF"
         rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
@@ -353,7 +353,7 @@ if [ "$RESET_MODE" = true ] || [ "$PATCH_ONLY_MODE" = true ]; then
             echo 'SET portal "127.0.0.1"' >> "$WOW_CONFIG"
         fi
     fi
-    if [ "$PATCH_ONLY_MODE" = true ]; then
+    if [ "$PATCH_ONLY" = true ]; then
         echo "[*] Patch check completed successfully."
     fi
     exit 0
@@ -368,7 +368,7 @@ fi
 
 # If user passed --bnet <ip>. Force direct.
 if [ -n "$DIRECT_BNET_IP" ]; then
-    CONNECTION_MODE="DIRECT"
+    CONNECTION_TYPE="DIRECT"
 
     # Write to config if missing, if previously set to proxy, or IP changed
     if [ "$CONFIG_EXISTS" = false ] || [ "$SAVED_USE_PROXY" = true ] || [ "$SAVED_IP" != "$DIRECT_BNET_IP" ]; then
@@ -381,7 +381,7 @@ if [ -n "$DIRECT_BNET_IP" ]; then
 
 # If user passed Proxy arguments. Force Proxy.
 elif [ "$PROXY_ARGS_PASSED" = true ]; then
-    CONNECTION_MODE="PROXY"
+    CONNECTION_TYPE="PROXY"
 
     # Determine the ServerAddress to save
     NEW_SAVED_IP="$SAVED_IP"
@@ -403,9 +403,9 @@ elif [ "$PROXY_ARGS_PASSED" = true ]; then
 # If normal run (No overriding arguments)
 else
     if [ "$CONFIG_EXISTS" = true ]; then
-        if [ "$SAVED_USE_PROXY" = true ]; then CONNECTION_MODE="PROXY"
+        if [ "$SAVED_USE_PROXY" = true ]; then CONNECTION_TYPE="PROXY"
         else
-            CONNECTION_MODE="DIRECT"
+            CONNECTION_TYPE="DIRECT"
         fi
     else
         echo ""
@@ -417,12 +417,12 @@ else
 
         # Matches y, Y, yes, Yes, or empty string (defaults to Yes)
         if [[ -z "$USE_PROXY_INPUT" ]] || [[ "$USE_PROXY_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-            CONNECTION_MODE="PROXY"
+            CONNECTION_TYPE="PROXY"
             SAVED_USE_PROXY=true
             echo "Example: logon.example.com or 127.0.0.1"
             read -p "Enter realmlist server address: " INPUT_IP
         else
-            CONNECTION_MODE="DIRECT"
+            CONNECTION_TYPE="DIRECT"
             SAVED_USE_PROXY=false
             read -p "Enter bnetserver IP: " INPUT_IP
         fi
@@ -437,7 +437,7 @@ fi
 
 # Apply the loaded/saved configuration
 
-if [ "$CONNECTION_MODE" = "PROXY" ]; then
+if [ "$CONNECTION_TYPE" = "PROXY" ]; then
     LAUNCH_PROXY=true
 
     # Update Game Config to Proxy IP
@@ -496,7 +496,7 @@ if [ "$CONNECTION_MODE" = "PROXY" ]; then
         fi
     done
 
-elif [ "$CONNECTION_MODE" = "DIRECT" ]; then
+elif [ "$CONNECTION_TYPE" = "DIRECT" ]; then
     echo "[*] Configuring WoW to connect directly to $SAVED_IP..."
     if grep -q "^SET portal" "$WOW_CONFIG"; then
         sed -i '' 's/^SET portal.*/SET portal "'"$SAVED_IP"'"/g' "$WOW_CONFIG"
@@ -506,24 +506,91 @@ elif [ "$CONNECTION_MODE" = "DIRECT" ]; then
 fi
 
 # 4. Execution Phase
-PROXY_PROC_NAME=$(basename "$PROXY_BIN")
-killall "$PROXY_PROC_NAME" 2>/dev/null
-sleep 1
+# Job control on, so the game gets its own process group, away from Ctrl+C
+set -m
 
-echo "[*] Launching World of Warcraft Classic..."
-nohup "$WOW_BIN" > /dev/null 2>&1 &
+# BUILD:WITHIN_APP_BEGIN - build_launcher.sh gives the app its own version of this
+proxy_already_running() {
+    read -p "A proxy is already running. Keep it running? [Y/n]: " KEEP_RUNNING
+    [[ -z "$KEEP_RUNNING" ]] && KEEP_RUNNING="Y"
+
+    if [[ "$KEEP_RUNNING" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        echo "[*] Keeping the existing proxy running."
+        START_PROXY=false
+    else
+        killall "$PROXY_PROC_NAME" 2>/dev/null
+        sleep 1
+    fi
+}
+
+announce_proxy_started() {
+    echo "[*] Connection Proxy running..."
+}
+
+after_game_launched() {
+    echo "[*] Done! You can close this terminal."
+}
+
+on_game_closed() {
+    if kill -0 $$ 2>/dev/null; then
+        echo ""
+        echo "[*] Game closed. Proxy is still running - Ctrl+C to stop it."
+    fi
+}
+# BUILD:WITHIN_APP_END
+
+START_PROXY=true
 
 if [ "$LAUNCH_PROXY" = true ]; then
+    PROXY_PROC_NAME=$(basename "$PROXY_BIN")
+    pgrep -x "$PROXY_PROC_NAME" > /dev/null 2>&1 && proxy_already_running
+fi
+
+if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
     FULL_PROXY_CMD=("${PROXY_COMMAND[@]}")
 
-    echo "Executing proxy command: ${FULL_PROXY_CMD[*]}"
-    echo "[*] Connection Proxy running in this terminal (close it to stop proxy)..."
-    echo "======================================="
+    echo "[*] Executing proxy command: ${FULL_PROXY_CMD[*]}"
+    announce_proxy_started
+
+    # Watch the game from its own subshell - exec below stops this process reaping it directly
+    (
+        echo "[*] Launching World of Warcraft Classic..."
+        echo "======================================="
+
+        nohup "$WOW_BIN" > /dev/null 2>&1 &
+        WOW_PID=$!
+
+        while kill -0 "$WOW_PID" 2>/dev/null; do
+            sleep 2
+        done
+        # Another account may still be using this proxy - match by path, not just name
+        if pgrep -f "$WOW_BIN" > /dev/null 2>&1; then
+            echo ""
+            echo "[*] Game closed, but another client is still connected."
+            echo "    Leaving the proxy running."
+            while pgrep -f "$WOW_BIN" > /dev/null 2>&1 && kill -0 $$ 2>/dev/null; do
+                sleep 2
+            done
+        fi
+
+        on_game_closed
+    ) &
+    disown
 
     cd "$PROXY_DIR"
     export DYLD_LIBRARY_PATH="$OPENSSL_DIR"
-    # Execute
-    "${FULL_PROXY_CMD[@]}"
+    # exec replaces this process with the proxy, so Ctrl+C reaches it directly
+    # Stdin from /dev/null - HermesProxy's "Press enter to close" won't hang with no tty
+    exec "${FULL_PROXY_CMD[@]}" < /dev/null
 else
-    echo "[*] Done! You can close this terminal."
+    echo "[*] Launching World of Warcraft Classic..."
+    echo "======================================="
+
+    nohup "$WOW_BIN" > /dev/null 2>&1 &
+
+    if [ "$LAUNCH_PROXY" = true ]; then
+        after_game_launched
+    else
+        echo "[*] Done! You can close this terminal."
+    fi
 fi
