@@ -36,6 +36,7 @@ Patcher applies `40618.patch` — an delta binary diff — to the original Class
 It expects the unpatched sha checksum: `200c4c54316fb801d6d4d07d7031bb2b43f1c2be`
 
 <br />
+
 If you have quarantine issues, you may need to manually allow the app to run in Gatekeeper.
 
 ```bash
@@ -119,6 +120,30 @@ launch.sh --bnet 127.0.0.1
 ```bash
 chmod +x build/build_launcher.sh
 ./build/build_launcher.sh
+```
+
+### Resetting the Compiled App
+
+Once you've built `WoW Classic Launcher.app`, the only way to change the server you connect to (realmlist) is to reset its configuration.
+
+You can do this in one of two ways:
+
+<br />
+
+**Option 1: By Deleting the Config File**
+
+1. Locate `WoW Classic Launcher.app` in Finder.
+2. Right-click (or Control-click) the app and choose **Show Package Contents**.
+3. Navigate to `Contents/Resources/`.
+4. Delete the `40618.conf` file.
+5. Relaunch the app — you'll be prompted to set up the realm connection again.
+
+**Option 2: Via Terminal**
+
+Open Terminal (Applications → Utilities → Terminal, or search for it with Spotlight) and run:
+
+```bash
+"/path/to/WoW Classic Launcher.app/Contents/Resources/launch.sh" --reset
 ```
 
 <br />
