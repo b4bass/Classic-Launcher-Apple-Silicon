@@ -80,7 +80,7 @@ override_block() {
         index($0, start) { print; while ((getline line < bodyfile) > 0) print line; skip=1; next }
         index($0, end) { skip=0 }
         !skip { print }
-    ' "$LAUNCH_SH" > "$LAUNCH_SH.new" && mv "$LAUNCH_SH.new" "$LAUNCH_SH"
+    ' "$LAUNCH_SH" > "$LAUNCH_SH.new" && mv "$LAUNCH_SH.new" "$LAUNCH_SH" && chmod +x "$LAUNCH_SH"
 }
 
 cat > "$BUILD_TMP/body_close_window.sh" << 'EOF'
