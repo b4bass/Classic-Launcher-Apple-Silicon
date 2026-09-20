@@ -358,17 +358,17 @@ run_get_client() {
         abort_launch
     fi
 
-    # Mirrors wrap this differently - find whichever folder actually holds the client binary
+    # Mirrors wrap this differently - find whichever folder actually holds the client
     WOW_BIN_SUBPATH="_classic_era_/World of Warcraft Classic.app/Contents/MacOS/World of Warcraft Classic"
     EXTRACTED_ROOT="$GET_TMP/extracted"
-    if [ ! -f "$EXTRACTED_ROOT/$WOW_BIN_SUBPATH" ]; then
+    if [ ! -f "$EXTRACTED_ROOT/$WOW_BIN_SUBPATH" ] || [ ! -d "$EXTRACTED_ROOT/Data" ]; then
         EXTRACTED_ROOT=""
         for entry in "$GET_TMP/extracted"/*/; do
-            [ -f "${entry}${WOW_BIN_SUBPATH}" ] && EXTRACTED_ROOT="${entry%/}" && break
+            [ -f "${entry}${WOW_BIN_SUBPATH}" ] && [ -d "${entry}Data" ] && EXTRACTED_ROOT="${entry%/}" && break
         done
     fi
     if [ -z "$EXTRACTED_ROOT" ]; then
-        echo "[!] Unexpected archive layout (WoW Classic binary not found)." >&2
+        echo "[!] Unexpected archive layout (_classic_era_/Data not found)." >&2
         abort_launch
     fi
 
@@ -379,9 +379,14 @@ run_get_client() {
     fi
 
     echo "[*] Client fetched and installed."
-    # Fall through into the patch-and-launch flow below instead of exiting
     rm -rf "$GET_TMP"
     trap - EXIT
+    # --getmissing only downloads and extracts - re-run to patch and connect
+    if [ "$GET_MISSING" = true ]; then
+        echo "    Run again to patch and connect."
+        exit 0
+    fi
+    # Reached via the missing-client prompt mid-launch - fall through and continue
 }
 
 if [ "$GET_MISSING" = true ]; then
