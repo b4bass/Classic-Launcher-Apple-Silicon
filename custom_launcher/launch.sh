@@ -47,10 +47,14 @@ sha1_file() {
     shasum "$1" 2>/dev/null | awk '{print $1}'
 }
 
+# Called right before each binary/dir is actually used, not on every launch
 strip_quarantine() {
-    xattr -d com.apple.quarantine "$WOW_BIN" 2>/dev/null
-    for dir in "$LAUNCHER_DIR/xdelta3" "$PROXY_DIR" "$LAUNCHER_DIR/surge" "$OPENSSL_DIR"; do
-        [ -d "$dir" ] && xattr -dr com.apple.quarantine "$dir" 2>/dev/null
+    for path in "$@"; do
+        if [ -d "$path" ]; then
+            xattr -dr com.apple.quarantine "$path" 2>/dev/null
+        else
+            xattr -d com.apple.quarantine "$path" 2>/dev/null
+        fi
     done
     return 0
 }
@@ -219,7 +223,6 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
-# --- Get Mode ---
 # Compiled.app-only, build_launcher.sh fills this in
 # WITHIN_APP:close_window:start
 # WITHIN_APP:close_window:end
@@ -231,16 +234,18 @@ abort_launch() {
     # WITHIN_APP:abort_launch:end
 }
 
-run_get_client() {
-    echo "======================================="
-    echo "       WoW Classic 1.14.0 - Get        "
-    echo "======================================="
+echo "======================================="
+echo "     WoW Classic 1.14.0 - Patcher      "
+echo "======================================="
 
+# Only used if the client turns out to be missing below
+run_get_client() {
     if [ ! -f "$SURGE_BIN" ]; then
         echo "[!] Required surge binary not found at $SURGE_BIN" >&2
         echo "    Place it there (and chmod +x it), then retry." >&2
         abort_launch
     fi
+    strip_quarantine "$LAUNCHER_DIR/surge"
     chmod +x "$SURGE_BIN" 2>/dev/null
 
     # Normally only reachable via --getmissing on an existing install (CLI only)
@@ -383,24 +388,14 @@ run_get_client() {
     # Fall through into the patch-and-launch flow below instead of exiting
 }
 
+# 1. Make sure the client is actually here
 if [ "$GET_MISSING" = true ]; then
     run_get_client
     # --getmissing only downloads and extracts
+    echo "    Run again to patch and connect."
     exit 0
 fi
 
-echo "======================================="
-echo "     WoW Classic 1.14.0 - Patcher      "
-echo "======================================="
-
-# 1. Remove quarantine from what we execute/link - not the whole install
-echo "[*] Removing Apple quarantine security attributes..."
-strip_quarantine
-
-# Ensure binaries are executable
-chmod +x "$WOW_BIN" "$XDELTA_BIN" "$PROXY_BIN" 2>/dev/null
-
-# 2. Check Backup and Patch status
 if [ ! -f "$WOW_BIN" ]; then
     echo "[!] WoW binary not found at $WOW_BIN" >&2
     echo ""
@@ -411,20 +406,20 @@ if [ ! -f "$WOW_BIN" ]; then
     read -p "Fetch the 40618 client now? [Y/n]: " GET_MISSING_INPUT
     if [[ -z "$GET_MISSING_INPUT" ]] || [[ "$GET_MISSING_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
         run_get_client
-        # Repeat the quarantine/chmod pass - it ran before this file existed
-        strip_quarantine
-        chmod +x "$WOW_BIN" 2>/dev/null
     fi
     if [ ! -f "$WOW_BIN" ]; then
         abort_launch
     fi
 fi
 
+# 2. Check Backup and Patch status
 ACTUAL_HASH=$(sha1_file "$WOW_BIN")
 if [ "$ACTUAL_HASH" == "$PATCHED_HASH" ]; then
     echo "[*] WoW binary is already patched. Skipping patch phase."
 elif [ "$ACTUAL_HASH" == "$UNPATCHED_HASH" ]; then
     echo "[*] Unpatched WoW binary detected. Initializing patch process..."
+    strip_quarantine "$WOW_BIN" "$LAUNCHER_DIR/xdelta3"
+    chmod +x "$WOW_BIN" "$XDELTA_BIN" 2>/dev/null
     if [ ! -f "$PATCH_FILE" ]; then
         echo "[!] Patch file not found at $PATCH_FILE" >&2
         abort_launch
@@ -475,6 +470,9 @@ if [ "$RESET" = true ] || [ "$PATCH_ONLY" = true ]; then
         rm -f "$USER_CONF"
         rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
         set_portal "127.0.0.1"
+        # Manual escape hatch - everything below is normally only touched on first use
+        strip_quarantine "$WOW_BIN" "$LAUNCHER_DIR/xdelta3" "$LAUNCHER_DIR/surge" "$PROXY_DIR" "$OPENSSL_DIR"
+        chmod +x "$WOW_BIN" "$XDELTA_BIN" "$SURGE_BIN" "$PROXY_BIN" 2>/dev/null
     fi
     if [ "$PATCH_ONLY" = true ]; then
         echo "[*] Patch check completed successfully."
@@ -570,7 +568,6 @@ if [ "$CONNECTION_TYPE" = "PROXY" ]; then
     if [ -n "$CUSTOM_PROXY_BIN" ]; then
         if [ -f "$PROXY_DIR/$CUSTOM_PROXY_BIN" ]; then
             PROXY_BIN="$PROXY_DIR/$CUSTOM_PROXY_BIN"
-            chmod +x "$PROXY_BIN" 2>/dev/null
         else
             echo "[!] Custom proxy '$CUSTOM_PROXY_BIN' not found. Using default." >&2
         fi
@@ -666,6 +663,8 @@ fi
 
 if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
     FULL_PROXY_CMD=("${PROXY_COMMAND[@]}")
+    strip_quarantine "$PROXY_DIR" "$OPENSSL_DIR"
+    chmod +x "$PROXY_BIN" 2>/dev/null
 
     echo "[*] Executing proxy command: ${FULL_PROXY_CMD[*]}"
     echo "[*] Connection Proxy running..."
