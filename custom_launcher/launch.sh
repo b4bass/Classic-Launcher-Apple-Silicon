@@ -236,20 +236,19 @@ run_get_client() {
     echo "       WoW Classic 1.14.0 - Get        "
     echo "======================================="
 
-    # Only missing on a broken build - not worth a nicer app close for this
     if [ ! -f "$SURGE_BIN" ]; then
-        echo "[!] Required binary not found at $SURGE_BIN" >&2
+        echo "[!] Required surge binary not found at $SURGE_BIN" >&2
         echo "    Place it there (and chmod +x it), then retry." >&2
-        exit 1
+        abort_launch
     fi
     chmod +x "$SURGE_BIN" 2>/dev/null
 
-    # Can only happen via --getmissing on an existing install - CLI only
+    # Normally only reachable via --getmissing on an existing install (CLI only)
     if [ -f "$WOW_BIN" ]; then
         echo "[!] A client already exists at $WOW_BIN" >&2
-        echo "    --getmissing is only for an initial, empty install. Remove it first" >&2
+        echo "    --getmissing is only for an initial, empty install. Remove client files first" >&2
         echo "    if you really want to fetch it again." >&2
-        exit 1
+        abort_launch
     fi
 
     if pgrep -x "$(basename "$SURGE_BIN")" > /dev/null 2>&1; then
@@ -274,7 +273,7 @@ run_get_client() {
         if [ ${#MIRRORS[@]} -eq 0 ]; then
             echo "[!] No mirrors listed in $MIRROR_LIST_FILE" >&2
             echo "    Add at least one URL to that file (one per line), then retry." >&2
-            exit 1
+            abort_launch
         fi
 
         if [ ${#MIRRORS[@]} -eq 1 ]; then
@@ -288,7 +287,7 @@ run_get_client() {
             read -p "Enter choice [1-${#MIRRORS[@]}]: " MIRROR_CHOICE
             if ! [[ "$MIRROR_CHOICE" =~ ^[0-9]+$ ]] || [ "$MIRROR_CHOICE" -lt 1 ] || [ "$MIRROR_CHOICE" -gt "${#MIRRORS[@]}" ]; then
                 echo "[!] Invalid selection." >&2
-                exit 1
+                abort_launch
             fi
             SELECTED_URL="${MIRRORS[$((MIRROR_CHOICE - 1))]}"
         fi
@@ -298,7 +297,7 @@ run_get_client() {
         http://*|https://*) ;;
         *)
             echo "[!] Mirror URL must start with http:// or https://: $SELECTED_URL" >&2
-            exit 1
+            abort_launch
             ;;
     esac
 
@@ -359,7 +358,7 @@ run_get_client() {
     fi
 
     # Mirrors wrap this differently - find whichever folder actually holds the client
-    WOW_BIN_SUBPATH="_classic_era_/World of Warcraft Classic.app/Contents/MacOS/World of Warcraft Classic"
+    WOW_BIN_SUBPATH="${WOW_BIN#"$BASE_DIR/"}"
     EXTRACTED_ROOT="$GET_TMP/extracted"
     if [ ! -f "$EXTRACTED_ROOT/$WOW_BIN_SUBPATH" ] || [ ! -d "$EXTRACTED_ROOT/Data" ]; then
         EXTRACTED_ROOT=""
@@ -381,16 +380,13 @@ run_get_client() {
     echo "[*] Client fetched and installed."
     rm -rf "$GET_TMP"
     trap - EXIT
-    # --getmissing only downloads and extracts - re-run to patch and connect
-    if [ "$GET_MISSING" = true ]; then
-        echo "    Run again to patch and connect."
-        exit 0
-    fi
-    # Reached via the missing-client prompt mid-launch - fall through and continue
+    # Fall through into the patch-and-launch flow below instead of exiting
 }
 
 if [ "$GET_MISSING" = true ]; then
     run_get_client
+    # --getmissing only downloads and extracts
+    exit 0
 fi
 
 echo "======================================="
@@ -429,18 +425,15 @@ if [ "$ACTUAL_HASH" == "$PATCHED_HASH" ]; then
     echo "[*] WoW binary is already patched. Skipping patch phase."
 elif [ "$ACTUAL_HASH" == "$UNPATCHED_HASH" ]; then
     echo "[*] Unpatched WoW binary detected. Initializing patch process..."
-    # Ships bundled with the patch file - only missing on a broken build
     if [ ! -f "$PATCH_FILE" ]; then
         echo "[!] Patch file not found at $PATCH_FILE" >&2
-        exit 1
+        abort_launch
     fi
 
     if [ -f "$WOW_BAK" ]; then
         BACKUP_HASH=$(sha1_file "$WOW_BAK")
         if [ "$BACKUP_HASH" != "$UNPATCHED_HASH" ]; then
             echo "[!] Existing backup at $WOW_BAK doesn't match the expected unpatched client." >&2
-            echo "    Refusing to patch from a backup that may be corrupt. Remove it manually" >&2
-            echo "    if you're sure it's fine, or delete it to have it recreated." >&2
             abort_launch
         fi
     else
@@ -556,7 +549,7 @@ else
         SAVED_IP=${INPUT_IP:-127.0.0.1}
         if ! validate_server_address "$SAVED_IP"; then
             echo "[!] '$SAVED_IP' is not a valid IP or hostname." >&2
-            exit 1
+            abort_launch
         fi
         # Save to file
         save_config
@@ -713,9 +706,5 @@ else
 
     nohup "$WOW_BIN" > /dev/null 2>&1 &
 
-    if [ "$LAUNCH_PROXY" = true ]; then
-        after_game_launched
-    else
-        echo "[*] Done! You can close this terminal."
-    fi
+    after_game_launched
 fi
