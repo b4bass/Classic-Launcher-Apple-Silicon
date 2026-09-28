@@ -34,7 +34,8 @@ fi
 
 PROXY_DIR="$LAUNCHER_DIR/proxy"
 PROXY_BIN="$PROXY_DIR/HermesProxy"
-USER_CONF="$LAUNCHER_DIR/40618.conf"
+# Lives in the game folder, not the launcher - survives rebuilding the .app
+USER_CONF="$BASE_DIR/40618.conf"
 
 SURGE_BIN="$LAUNCHER_DIR/surge/surge"
 MIRROR_LIST_FILE="$LAUNCHER_DIR/surge/archives.txt"
@@ -67,6 +68,24 @@ validate_server_address() {
     return 0
 }
 
+# Only direct connections may carry a :port - the proxy sets its own
+validate_bnet_address() {
+    local host port
+    case "$1" in
+        :*|*:|*:*:*) return 1 ;;
+        *:*)
+            host="${1%:*}"
+            port="${1#*:}"
+            case "$port" in
+                *[!0-9]*) return 1 ;;
+            esac
+            [ "${#port}" -le 5 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
+            validate_server_address "$host"
+            ;;
+        *) validate_server_address "$1" ;;
+    esac
+}
+
 set_portal() {
     local portal="$1"
     if grep -q '^SET portal' "$WOW_CONFIG"; then
@@ -76,21 +95,27 @@ set_portal() {
     fi
 }
 
+# 0 = usable, 1 = no file yet, 2 = garbage
 load_config() {
     [ -f "$USER_CONF" ] || return 1
-    local key value
-    while IFS='=' read -r key value; do
+    [ -r "$USER_CONF" ] || return 2 # Can't read it, so treat it like garbage
+    local key value use_proxy="" saved_ip=""
+    while IFS='=' read -r key value || [ -n "$key" ]; do
         case "$key" in
-            SAVED_USE_PROXY)
-                case "$value" in
-                    true|false) SAVED_USE_PROXY="$value" ;;
-                esac
-                ;;
-            SAVED_IP)
-                validate_server_address "$value" && SAVED_IP="$value"
-                ;;
+            SAVED_USE_PROXY) use_proxy="$value" ;;
+            SAVED_IP) saved_ip="$value" ;;
         esac
     done < "$USER_CONF"
+
+    # Both keys have to be present and sane, or the whole file counts as garbage
+    case "$use_proxy" in
+        true) validate_server_address "$saved_ip" || return 2 ;;
+        false) validate_bnet_address "$saved_ip" || return 2 ;;
+        *) return 2 ;;
+    esac
+
+    SAVED_USE_PROXY="$use_proxy"
+    SAVED_IP="$saved_ip"
     CONFIG_EXISTS=true
     return 0
 }
@@ -122,7 +147,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --patch                Patch the binary only, don't launch"
             echo "  --reset                Clear saved connection config and caches"
             echo "  --getmissing [url]     Fetch an untouched 40618 client (prompts for a mirror if no url given)"
-            echo "  --bnet [ip]            Connect directly, bypassing the proxy (default ip: 127.0.0.1)"
+            echo "  --bnet [ip[:port]]     Connect directly, bypassing the proxy (default ip: 127.0.0.1)"
             echo "  --switchproxy <name>   Use a custom proxy binary from the proxy/ folder"
             echo "  --config <file>        Pass a custom proxy configuration file"
             echo "  --set <key=value>      Pass a proxy override, repeatable"
@@ -166,8 +191,8 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         --bnet)
             if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-                if ! validate_server_address "$2"; then
-                    echo "[!] --bnet: '$2' is not a valid IP or hostname." >&2
+                if ! validate_bnet_address "$2"; then
+                    echo "[!] --bnet: '$2' is not a valid IP, hostname, or host:port." >&2
                     exit 1
                 fi
                 DIRECT_BNET_IP="$2"
@@ -235,7 +260,7 @@ abort_launch() {
 }
 
 echo "======================================="
-echo "     WoW Classic 1.14.0 - Patcher      "
+echo "WoW Classic 1.14.0 - Patcher & Launcher"
 echo "======================================="
 
 # Only used if the client turns out to be missing below
@@ -464,25 +489,47 @@ fi
 mkdir -p "$WOW_WTF_DIR"
 touch "$WOW_CONFIG"
 
-if [ "$RESET" = true ] || [ "$PATCH_ONLY" = true ]; then
-    if [ "$RESET" = true ]; then
-        echo "[*] --reset flag detected. Clearing saved configuration, caches..."
-        rm -f "$USER_CONF"
-        rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
-        set_portal "127.0.0.1"
-        # Manual escape hatch - everything below is normally only touched on first use
-        strip_quarantine "$WOW_BIN" "$LAUNCHER_DIR/xdelta3" "$LAUNCHER_DIR/surge" "$PROXY_DIR" "$OPENSSL_DIR"
-        chmod +x "$WOW_BIN" "$XDELTA_BIN" "$SURGE_BIN" "$PROXY_BIN" 2>/dev/null
+# 3. Handle User Configuration
+# No point reading a config --reset is about to delete, and --patch never needs it
+if [ "$RESET" = false ] && [ "$PATCH_ONLY" = false ]; then
+    load_config
+    CONF_STATE=$?
+
+    if [ "$CONF_STATE" -eq 0 ]; then
+        echo "[*] Loading saved configuration from 40618.conf..."
+    # Nothing usable - reset below, unless arguments will overwrite it anyway
+    elif [ "$CONF_STATE" -eq 2 ] && [ -z "$DIRECT_BNET_IP" ] && [ "$PROXY_ARGS_PASSED" = false ]; then
+        echo "[!] 40618.conf holds no usable settings."
+        echo ""
+        echo "==== Invalid Launcher Config File ====="
+        echo "  [Yes] -> Reset the configuration"
+        echo "   No   -> Exit, fix or delete 40618.conf yourself"
+        echo "======================================="
+        read -p "Reset 40618.conf now? [Y/n]: " RESET_CONF_INPUT
+        if [[ -z "$RESET_CONF_INPUT" ]] || [[ "$RESET_CONF_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+            RESET=true
+        else
+            echo "[!] Left the file as it is: $USER_CONF" >&2
+            abort_launch
+        fi
     fi
-    if [ "$PATCH_ONLY" = true ]; then
-        echo "[*] Patch check completed successfully."
-    fi
-    exit 0
 fi
 
-# 3. Handle User Configuration
-if load_config; then
-    echo "[*] Loading saved configuration from 40618.conf..."
+# --reset, or the answer to the prompt above
+if [ "$RESET" = true ]; then
+    echo "[*] Clearing saved configuration, caches..."
+    rm -f "$USER_CONF"
+    rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
+    set_portal "127.0.0.1"
+    # Manual escape hatch - everything below is normally only touched on first use
+    strip_quarantine "$WOW_BIN" "$LAUNCHER_DIR/xdelta3" "$LAUNCHER_DIR/surge" "$PROXY_DIR" "$OPENSSL_DIR"
+    chmod +x "$WOW_BIN" "$XDELTA_BIN" "$SURGE_BIN" "$PROXY_BIN" 2>/dev/null
+fi
+
+# --patch stops here - --reset carries on into the connection setup below
+if [ "$PATCH_ONLY" = true ]; then
+    echo "[*] Patch check completed successfully."
+    exit 0
 fi
 
 # If user passed --bnet <ip>. Force direct.
@@ -507,6 +554,8 @@ elif [ "$PROXY_ARGS_PASSED" = true ]; then
         NEW_SAVED_IP="$EXTRACTED_SERVER_ADDRESS"
     elif [ -z "$SAVED_IP" ]; then
         NEW_SAVED_IP="127.0.0.1" # Fallback if no config and no explicit ServerAddress
+    else
+        NEW_SAVED_IP="${SAVED_IP%%:*}" # Any port came from --bnet - the proxy sets its own
     fi
 
     # Write to config if missing, if previously set to direct, or IP changed
@@ -541,11 +590,17 @@ else
         else
             CONNECTION_TYPE="DIRECT"
             SAVED_USE_PROXY=false
+            echo "Example: 127.0.0.1 or 127.0.0.1:1119"
             read -p "Enter bnetserver IP: " INPUT_IP
         fi
 
         SAVED_IP=${INPUT_IP:-127.0.0.1}
-        if ! validate_server_address "$SAVED_IP"; then
+        if [ "$CONNECTION_TYPE" = "DIRECT" ]; then
+            if ! validate_bnet_address "$SAVED_IP"; then
+                echo "[!] '$SAVED_IP' is not a valid IP, hostname, or host:port." >&2
+                abort_launch
+            fi
+        elif ! validate_server_address "$SAVED_IP"; then
             echo "[!] '$SAVED_IP' is not a valid IP or hostname." >&2
             abort_launch
         fi
