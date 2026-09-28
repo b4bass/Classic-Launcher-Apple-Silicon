@@ -29,7 +29,7 @@ Manually execute the launch script.
 ./custom_launcher/launch.sh
 ```
 
-When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (VMaNGOS & CMaNGOS).
+When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (MaNGOS).
 
 Patcher applies `40618.patch` — an delta binary diff — to the original Classic 1.14.0 (40618) client.
 
