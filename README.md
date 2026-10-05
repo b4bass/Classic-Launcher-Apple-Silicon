@@ -1,6 +1,6 @@
 # Classic-Launcher-Apple-Silicon
 
-Patches and launches the native Apple Silicon (ARM) build of Classic 1.14.0, connecting to Vanilla 1.12 realms.
+Patches and launches the modern Apple Silicon (ARM) build of Classic 1.14.0, connecting to Vanilla 1.12 realms.
 
 > **Help needed:** support for the 1.14.2 client — see [#9](https://github.com/b4bass/Classic-Launcher-Apple-Silicon/issues/9).
 
