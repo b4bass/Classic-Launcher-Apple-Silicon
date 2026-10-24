@@ -1,2 +1,2 @@
 https://github.com/SurgeDM/Surge
-v0.12.2
+v0.12.3
