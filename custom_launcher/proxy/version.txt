@@ -1,2 +1,2 @@
 https://github.com/Xian55/HermesProxy
-Release v4.6.32 (2026-10-23)
+Release v4.6.69 (2026-10-25)
