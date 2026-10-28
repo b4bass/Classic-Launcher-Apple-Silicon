@@ -18,6 +18,13 @@ if [[ "$LAUNCHER_DIR" == *".app/Contents/Resources" ]]; then
 else
     BASE_DIR="$(dirname "$LAUNCHER_DIR")"
 fi
+# --game <dir> overrides the game folder - checked again in the argument parsing
+for ((i = 1; i < $#; i++)); do
+    if [ "${!i}" = "--game" ]; then
+        GAME_ARG=$((i + 1))
+        BASE_DIR="$(cd "${!GAME_ARG}" 2>/dev/null && pwd)"
+    fi
+done
 
 WOW_APP="$BASE_DIR/_classic_era_/World of Warcraft Classic.app"
 WOW_BIN="$WOW_APP/Contents/MacOS/World of Warcraft Classic"
@@ -27,10 +34,7 @@ WOW_CONFIG="$WOW_WTF_DIR/Config.wtf"
 
 XDELTA_BIN="$LAUNCHER_DIR/xdelta3/bin/xdelta3"
 OPENSSL_DIR="$LAUNCHER_DIR/openssl-3.0.7"
-PATCH_FILE="$BASE_DIR/build/40618.patch"
-if [ "$WITHIN_APP" = true ]; then
-    PATCH_FILE="$LAUNCHER_DIR/build/40618.patch"
-fi
+PATCH_FILE="$LAUNCHER_DIR/build/patch/40618.patch"
 
 PROXY_DIR="$LAUNCHER_DIR/proxy"
 PROXY_BIN="$PROXY_DIR/HermesProxy"
@@ -143,6 +147,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "Usage: launch.sh [option]"
             echo ""
             echo "  (no options)           Patch if needed, then launch and connect"
+            echo "  --game <dir>           Use the game folder <dir> instead of this launcher's parent folder"
             echo "  --checkpatch           Print PATCHED, UNPATCHED, or ERROR, and exit"
             echo "  --patch                Patch the binary only, don't launch"
             echo "  --reset                Clear saved connection config and caches"
@@ -153,6 +158,15 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --set <key=value>      Pass a proxy override, repeatable"
             echo "  --help, -h             Show this help"
             exit 0
+            ;;
+        --game)
+            # Already applied in the path definitions
+            if [[ -n "$2" && ! "$2" =~ ^-- ]] && [ -d "$2" ]; then
+                shift 2
+            else
+                echo "[!] --game requires an existing game folder (the one that holds _classic_era_)." >&2
+                exit 1
+            fi
             ;;
         --checkpatch)
             if [ -f "$WOW_BIN" ]; then

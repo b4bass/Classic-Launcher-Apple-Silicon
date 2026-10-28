@@ -1,12 +1,12 @@
 #!/bin/bash
 
-BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # build/
-BASE_DIR="$(dirname "$BUILD_DIR")"                         # wow root
-LAUNCHER_DIR="$BASE_DIR/custom_launcher"                   # custom_launcher/
-APP_NAME="WoW Classic Launcher"
+BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # launcher/build/
+LAUNCHER_DIR="$(dirname "$BUILD_DIR")"                     # launcher/
+BASE_DIR="$(dirname "$LAUNCHER_DIR")"                      # game folder
+APP_NAME="Classic Era Launcher"
 APP_OUT="$BASE_DIR/$APP_NAME.app"
 ICON_PNG="$BUILD_DIR/wow.png"
-PATCH_FILE="$BUILD_DIR/40618.patch"
+PATCH_FILE="$BUILD_DIR/patch/40618.patch"
 
 # Private, per-build scratch space instead of predictable /tmp paths
 BUILD_TMP="$(mktemp -d)"
@@ -15,7 +15,7 @@ ICONSET="$BUILD_TMP/wow.iconset"
 ICON_ICNS="$BUILD_TMP/wow.icns"
 
 # 0. Make sure the tools and source files we depend on are actually here
-for cmd in sips iconutil osacompile codesign awk; do
+for cmd in sips iconutil osacompile codesign awk rsync; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "[!] Required command not found: $cmd" >&2; exit 1; }
 done
 [ -x /usr/libexec/PlistBuddy ] || { echo "[!] Required tool not found: /usr/libexec/PlistBuddy" >&2; exit 1; }
@@ -56,14 +56,15 @@ osacompile -o "$APP_OUT" "$BUILD_TMP/launcher.applescript" \
     || { echo "[!] osacompile failed to produce the .app." >&2; exit 1; }
 
 # 4. Copy content into the app bundle so it's self-contained
-echo "[*] Including custom_launcher content in bundle..."
-mkdir -p "$APP_OUT/Contents/Resources/build"
-cp -R "$LAUNCHER_DIR/" "$APP_OUT/Contents/Resources/" || { echo "[!] Failed to copy launcher content." >&2; exit 1; }
-# keep the patch file in the build folder
-cp "$PATCH_FILE" "$APP_OUT/Contents/Resources/build/" || { echo "[!] Failed to copy the patch file." >&2; exit 1; }
-
-# Drop Finder metadata junk - never useful, never wanted
-find "$APP_OUT/Contents/Resources" -name ".DS_Store" -delete
+# Everything but the build folder (of which the app only needs the patch file), the proxy's own logs and account
+# data, and Finder metadata junk
+echo "[*] Including launcher content in bundle..."
+rsync -a --exclude '/build/' --exclude '/proxy/Logs/' --exclude '/proxy/PacketsLog/' --exclude '/proxy/AccountData/' \
+    --exclude '/proxy/appsettings.Development.json' --exclude '.DS_Store' \
+    "$LAUNCHER_DIR/" "$APP_OUT/Contents/Resources/" || { echo "[!] Failed to copy launcher content." >&2; exit 1; }
+mkdir -p "$APP_OUT/Contents/Resources/build/patch" \
+    && cp "$PATCH_FILE" "$APP_OUT/Contents/Resources/build/patch/" \
+    || { echo "[!] Failed to copy the patch file." >&2; exit 1; }
 
 # 5. Swap in the app's own proxy/window behavior (see WITHIN_APP markers in launch.sh)
 LAUNCH_SH="$APP_OUT/Contents/Resources/launch.sh"

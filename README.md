@@ -10,7 +10,7 @@ Extract the contents of the ZIP downloaded from this repository directly into yo
 
 ```bash
 tar xf Classic-Launcher-Apple-Silicon-main.zip --strip-components=1
-chmod +x custom_launcher/launch.sh
+chmod +x launcher/launch.sh
 ```
 
 Your directory should look like this:
@@ -19,14 +19,13 @@ Your directory should look like this:
 Game/
 ├── Data/
 ├── _classic_era_/
-├── custom_launcher/  ← from this repo
-└── build/            ← from this repo
+└── launcher/      ← from this repo
 ```
 
 Manually execute the launch script.
 
 ```bash
-./custom_launcher/launch.sh
+./launcher/launch.sh
 ```
 
 When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (MaNGOS).
@@ -40,7 +39,7 @@ It expects the unpatched sha checksum: `200c4c54316fb801d6d4d07d7031bb2b43f1c2be
 If you have quarantine issues, you may need to manually allow the app to run in Gatekeeper.
 
 ```bash
-sudo xattr -cr custom_launcher/
+sudo xattr -cr launcher/
 ```
 
 If you encounter a CAS system error, delete your Cache folder or reset the configuration.
@@ -71,6 +70,12 @@ To fetch missing files.
 
 ```bash
 launch.sh --getmissing
+```
+
+To use a game folder somewhere else.
+
+```bash
+launch.sh --game /path/to/Game
 ```
 
 To list all available options.
@@ -115,18 +120,18 @@ launch.sh --bnet 127.0.0.1
 
 <br />
 
-### Classic Launcher.app Compilation (Optional)
+### Classic Era Launcher.app Compilation (Optional)
 
 ```bash
-chmod +x build/build_launcher.sh
-./build/build_launcher.sh
+chmod +x launcher/build/build_launcher.sh
+./launcher/build/build_launcher.sh
 ```
 
 ### Resetting the Compiled App
 
-Once you've built `WoW Classic Launcher.app`, the only way to change the server you connect to (realmlist) is to reset its configuration.
+Once you've built `Classic Era Launcher.app`, the only way to change the server you connect to (realmlist) is to reset its configuration.
 
-1. Open your game folder in Finder — the one holding `WoW Classic Launcher.app` and `_classic_era_`.
+1. Open your game folder in Finder — the one holding `Classic Era Launcher.app` and `_classic_era_`.
 2. Delete the `connect.conf` file.
 3. Relaunch the app — you'll be prompted to set up the realm connection again.
 
