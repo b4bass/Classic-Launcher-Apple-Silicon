@@ -1,6 +1,6 @@
 # Classic-Launcher-Apple-Silicon
 
-Patches and launches the modern macOS (Apple Silicon and Intel) build of Classic 1.14, connecting to Vanilla 1.12 realms.
+Patches and launches the modern macOS build of Classic 1.14 for Apple Silicon and Intel, enabling connections to legacy Vanilla 1.12 realms.
 
 > **Help needed:** support for the 1.14.2 client — see [#9](https://github.com/b4bass/Classic-Launcher-Apple-Silicon/issues/9).
 
@@ -30,7 +30,7 @@ Manually execute the launch script.
 
 When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (MaNGOS).
 
-The launcher copies `classicpatch.dylib` to the game app and modifies the binary once to load the library at start time.
+The launcher copies `classicpatch.dylib` to the game app and modifies the binary once to load the library at start time.<br />
 At each startup, the library patches the client in memory, modifying the server keys, certificate checks, and login portal.
 
 It expects the unpatched sha1 checksum:
@@ -143,15 +143,15 @@ Once you've built `Classic Era Launcher.app`, the only way to change the server 
 
 ### classicpatch.dylib Compilation (Optional)
 
-`classicpatch.dylib` is precompiled and ships ready to use. You only need to rebuild it if you modify its source, `classicpatch.c`.
-The build produces a single library compatible with both Apple Silicon and Intel Macs. It requires Apple's Command Line Tools, but not Xcode.
-
-To rebuild the library, run:
+The library can be built from `classicpatch.c` for both Apple Silicon and Intel Macs.
 
 ```bash
+xcode-select --install
 chmod +x launcher/build/patch/build_classicpatch.sh
 ./launcher/build/patch/build_classicpatch.sh
 ```
+
+`classicpatch.dylib` is already precompiled and ships ready to use.
 
 <br />
 <br />
