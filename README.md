@@ -127,7 +127,7 @@ chmod +x build/build_launcher.sh
 Once you've built `WoW Classic Launcher.app`, the only way to change the server you connect to (realmlist) is to reset its configuration.
 
 1. Open your game folder in Finder — the one holding `WoW Classic Launcher.app` and `_classic_era_`.
-2. Delete the `40618.conf` file.
+2. Delete the `connect.conf` file.
 3. Relaunch the app — you'll be prompted to set up the realm connection again.
 
 <br />

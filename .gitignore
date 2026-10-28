@@ -6,7 +6,7 @@ Data/
 .build.info
 .patch.result
 WoW Classic Launcher.app/
-40618.conf
+connect.conf
 custom_launcher/proxy/appsettings.Development.json
 custom_launcher/proxy/AccountData/
 custom_launcher/proxy/Logs/

@@ -35,10 +35,10 @@ fi
 PROXY_DIR="$LAUNCHER_DIR/proxy"
 PROXY_BIN="$PROXY_DIR/HermesProxy"
 # Lives in the game folder, not the launcher - survives rebuilding the .app
-USER_CONF="$BASE_DIR/40618.conf"
+USER_CONF="$BASE_DIR/connect.conf"
 
 SURGE_BIN="$LAUNCHER_DIR/surge/surge"
-MIRROR_LIST_FILE="$LAUNCHER_DIR/surge/archives.txt"
+MIRROR_LIST_FILE="$LAUNCHER_DIR/surge/archive_mirrors.txt"
 
 UNPATCHED_HASH="200c4c54316fb801d6d4d07d7031bb2b43f1c2be"
 PATCHED_HASH="eee46704fa257bb831f332d06e21064d9fee91b5"
@@ -227,7 +227,7 @@ while [[ "$#" -gt 0 ]]; do
                 PROXY_SET_ARGS+=("$2")
                 PROXY_ARGS_PASSED=true
 
-                # Extract ServerAddress if passed, to update 40618.conf
+                # Extract ServerAddress if passed, to update connect.conf
                 if [[ "$2" == ServerAddress=* ]]; then
                     EXTRACTED_SERVER_ADDRESS="${2#*=}"
                     if ! validate_server_address "$EXTRACTED_SERVER_ADDRESS"; then
@@ -299,7 +299,7 @@ run_get_client() {
                 MIRRORS+=("$line")
             done < "$MIRROR_LIST_FILE"
         fi
-        # Ships bundled with archives.txt - only empty if someone deleted it
+        # Ships bundled with archive_mirrors.txt - only empty if someone deleted it
         if [ ${#MIRRORS[@]} -eq 0 ]; then
             echo "[!] No mirrors listed in $MIRROR_LIST_FILE" >&2
             echo "    Add at least one URL to that file (one per line), then retry." >&2
@@ -496,16 +496,16 @@ if [ "$RESET" = false ] && [ "$PATCH_ONLY" = false ]; then
     CONF_STATE=$?
 
     if [ "$CONF_STATE" -eq 0 ]; then
-        echo "[*] Loading saved configuration from 40618.conf..."
+        echo "[*] Loading saved configuration from connect.conf..."
     # Nothing usable - reset below, unless arguments will overwrite it anyway
     elif [ "$CONF_STATE" -eq 2 ] && [ -z "$DIRECT_BNET_IP" ] && [ "$PROXY_ARGS_PASSED" = false ]; then
-        echo "[!] 40618.conf holds no usable settings."
+        echo "[!] connect.conf holds no usable settings."
         echo ""
         echo "==== Invalid Launcher Config File ====="
         echo "  [Yes] -> Reset the configuration"
-        echo "   No   -> Exit, fix or delete 40618.conf yourself"
+        echo "   No   -> Exit, fix or delete connect.conf yourself"
         echo "======================================="
-        read -p "Reset 40618.conf now? [Y/n]: " RESET_CONF_INPUT
+        read -p "Reset connect.conf now? [Y/n]: " RESET_CONF_INPUT
         if [[ -z "$RESET_CONF_INPUT" ]] || [[ "$RESET_CONF_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
             RESET=true
         else
@@ -541,7 +541,7 @@ if [ -n "$DIRECT_BNET_IP" ]; then
         SAVED_USE_PROXY=false
         SAVED_IP="$DIRECT_BNET_IP"
         save_config
-        echo "[*] Updated 40618.conf: Switched to Direct Connection ($SAVED_IP)."
+        echo "[*] Updated connect.conf: Switched to Direct Connection ($SAVED_IP)."
     fi
 
 # If user passed Proxy arguments. Force Proxy.
@@ -563,7 +563,7 @@ elif [ "$PROXY_ARGS_PASSED" = true ]; then
         SAVED_USE_PROXY=true
         SAVED_IP="$NEW_SAVED_IP"
         save_config
-        echo "[*] Updated 40618.conf: Switched to Proxy Connection ($SAVED_IP)."
+        echo "[*] Updated connect.conf: Switched to Proxy Connection ($SAVED_IP)."
     fi
 
 # If normal run (No overriding arguments)
@@ -606,7 +606,7 @@ else
         fi
         # Save to file
         save_config
-        echo "[*] Settings saved to 40618.conf. Use ./launch.sh --reset to change them later."
+        echo "[*] Settings saved to connect.conf. Use ./launch.sh --reset to change them later."
     fi
 fi
 
