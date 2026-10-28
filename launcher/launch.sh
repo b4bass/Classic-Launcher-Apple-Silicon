@@ -148,7 +148,7 @@ while [[ "$#" -gt 0 ]]; do
             echo ""
             echo "  (no options)           Patch if needed, then launch and connect"
             echo "  --game <dir>           Use the game folder <dir> instead of this launcher's parent folder"
-            echo "  --checkpatch           Print PATCHED, UNPATCHED, or ERROR, and exit"
+            echo "  --checkpatch           Print PATCHED, UNPATCHED, UNKNOWN, or MISSING, and exit"
             echo "  --patch                Patch the binary only, don't launch"
             echo "  --reset                Clear saved connection config and caches"
             echo "  --getmissing [url]     Fetch an untouched 40618 client (prompts for a mirror if no url given)"
@@ -178,11 +178,11 @@ while [[ "$#" -gt 0 ]]; do
                     echo "UNPATCHED"
                     exit 1
                 else
-                    echo "ERROR"
+                    echo "UNKNOWN"
                     exit 2
                 fi
             else
-                echo "ERROR"
+                echo "MISSING"
                 exit 3
             fi
             ;;
@@ -274,7 +274,7 @@ abort_launch() {
 }
 
 echo "======================================="
-echo "WoW Classic 1.14.0 - Patcher & Launcher"
+echo "WoW Classic 1.14.x - Patcher & Launcher"
 echo "======================================="
 
 # Only used if the client turns out to be missing below
@@ -439,7 +439,7 @@ if [ ! -f "$WOW_BIN" ]; then
     echo "[!] WoW binary not found at $WOW_BIN" >&2
     echo ""
     echo "====== Get missing client files ======="
-    echo "  [Yes] -> Fetch the 40618 client"
+    echo "  [Yes] -> Fetch the 1.14.0 client"
     echo "   No   -> Exit, fetch it manually later"
     echo "======================================="
     read -p "Fetch the 40618 client now? [Y/n]: " GET_MISSING_INPUT
