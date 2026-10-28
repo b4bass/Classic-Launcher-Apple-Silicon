@@ -1,6 +1,6 @@
 # Classic-Launcher-Apple-Silicon
 
-Patches and launches the modern Apple Silicon (ARM) build of Classic 1.14.0, connecting to Vanilla 1.12 realms.
+Patches and launches the modern macOS (Apple Silicon and Intel) build of Classic 1.14, connecting to Vanilla 1.12 realms.
 
 > **Help needed:** support for the 1.14.2 client — see [#9](https://github.com/b4bass/Classic-Launcher-Apple-Silicon/issues/9).
 
@@ -30,9 +30,13 @@ Manually execute the launch script.
 
 When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (MaNGOS).
 
-Patcher applies `40618.patch` — an delta binary diff — to the original Classic 1.14.0 (40618) client.
+The launcher copies `classicpatch.dylib` to the game app and modifies the binary once to load the library at start time.
+At each startup, the library patches the client in memory, modifying the server keys, certificate checks, and login portal.
 
-It expects the unpatched sha checksum: `200c4c54316fb801d6d4d07d7031bb2b43f1c2be`
+It expects the unpatched sha1 checksum:
+
+- 1.14.0 (40618): `200c4c54316fb801d6d4d07d7031bb2b43f1c2be`
+- 1.14.2 (42597): `638233fd384602862e41590e4b0213242c82257f`
 
 <br />
 
@@ -136,7 +140,21 @@ Once you've built `Classic Era Launcher.app`, the only way to change the server 
 3. Relaunch the app — you'll be prompted to set up the realm connection again.
 
 <br />
+
+### classicpatch.dylib Compilation (Optional)
+
+`classicpatch.dylib` is precompiled and ships ready to use. You only need to rebuild it if you modify its source, `classicpatch.c`.
+The build produces a single library compatible with both Apple Silicon and Intel Macs. It requires Apple's Command Line Tools, but not Xcode.
+
+To rebuild the library, run:
+
+```bash
+chmod +x launcher/build/patch/build_classicpatch.sh
+./launcher/build/patch/build_classicpatch.sh
+```
+
+<br />
 <br />
 
-Credits:  [0Blu](https://github.com/0Blu)   [Arctium](https://github.com/Arctium)   [Xian55](https://github.com/Xian55)
+Credits:  [0Blu](https://github.com/0Blu)   [Arctium](https://github.com/Arctium)   [Xian55](https://github.com/Xian55/HermesProxy)   [Jhinzuo2](https://github.com/jhinzuo2/wow-classic-arm64-customservers)
 <br />

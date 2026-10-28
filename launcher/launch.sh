@@ -9,6 +9,7 @@ CONFIG_EXISTS=false
 PROXY_ARGS_PASSED=false
 SAVED_USE_PROXY=false
 LAUNCH_PROXY=false
+CHECK_PATCH=false
 
 # --- Path Definitions ---
 LAUNCHER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +19,7 @@ if [[ "$LAUNCHER_DIR" == *".app/Contents/Resources" ]]; then
 else
     BASE_DIR="$(dirname "$LAUNCHER_DIR")"
 fi
-# --game <dir> overrides the game folder - checked again in the argument parsing
+# --game <dir> overrides the game folder
 for ((i = 1; i < $#; i++)); do
     if [ "${!i}" = "--game" ]; then
         GAME_ARG=$((i + 1))
@@ -26,26 +27,142 @@ for ((i = 1; i < $#; i++)); do
     fi
 done
 
-WOW_APP="$BASE_DIR/_classic_era_/World of Warcraft Classic.app"
-WOW_BIN="$WOW_APP/Contents/MacOS/World of Warcraft Classic"
-WOW_BAK="${WOW_BIN}_bak"
-WOW_WTF_DIR="$BASE_DIR/_classic_era_/WTF"
-WOW_CONFIG="$WOW_WTF_DIR/Config.wtf"
-
-XDELTA_BIN="$LAUNCHER_DIR/xdelta3/bin/xdelta3"
-OPENSSL_DIR="$LAUNCHER_DIR/openssl-3.0.7"
-PATCH_FILE="$LAUNCHER_DIR/build/patch/40618.patch"
-
-PROXY_DIR="$LAUNCHER_DIR/proxy"
-PROXY_BIN="$PROXY_DIR/HermesProxy"
-# Lives in the game folder, not the launcher - survives rebuilding the .app
 USER_CONF="$BASE_DIR/connect.conf"
+GAME_APP="$BASE_DIR/_classic_era_/World of Warcraft Classic.app"
+GAME_BIN="$GAME_APP/Contents/MacOS/World of Warcraft Classic"
+GAME_BAK="${GAME_BIN}_bak"
+GAME_WTF_DIR="$BASE_DIR/_classic_era_/WTF"
+GAME_CONFIG="$GAME_WTF_DIR/Config.wtf"
 
+OPENSSL_DIR="$LAUNCHER_DIR/openssl-3.0.7"
 SURGE_BIN="$LAUNCHER_DIR/surge/surge"
 MIRROR_LIST_FILE="$LAUNCHER_DIR/surge/archive_mirrors.txt"
+PROXY_DIR="$LAUNCHER_DIR/proxy"
+PROXY_BIN="$PROXY_DIR/HermesProxy"
 
-UNPATCHED_HASH="200c4c54316fb801d6d4d07d7031bb2b43f1c2be"
-PATCHED_HASH="eee46704fa257bb831f332d06e21064d9fee91b5"
+PATCH_DIR="$LAUNCHER_DIR/build/patch"
+PATCH_DIR_DYLIB="$PATCH_DIR/classicpatch.dylib"
+PATCH_SCRIPT="$PATCH_DIR/patch_binary.sh"
+
+# Relative to the game app's Contents folder
+CLASSICPATCH_SUBPATH="Frameworks/classicpatch.dylib"
+CLASSICPATCH_DYLIB="$GAME_APP/Contents/$CLASSICPATCH_SUBPATH"
+
+
+# --- Supported Clients ---
+# version build sha1-of-the-original-executable
+CLIENTS="
+1.14.0 40618 200c4c54316fb801d6d4d07d7031bb2b43f1c2be
+1.14.2 42597 638233fd384602862e41590e4b0213242c82257f
+"
+
+# --- Client Detection and Patching ---
+# Sets CLIENT_BUILD, CLIENT_VERSION, UNPATCHED_HASH for a known original sha1
+lookup_client() {
+    local version build unpatched
+    while read -r version build unpatched; do
+        if [ -n "$build" ] && [ "$1" == "$unpatched" ]; then
+            CLIENT_BUILD="$build"
+            CLIENT_VERSION="$version.$build"
+            UNPATCHED_HASH="$unpatched"
+            return 0
+        fi
+    done <<< "$CLIENTS"
+    return 1
+}
+
+# Patched = the executable loads classicpatch.dylib
+is_patched() {
+    LC_ALL=C grep -a -q -F "@executable_path/../$CLASSICPATCH_SUBPATH" "$1"
+}
+
+# A patched executable's sha1 is signed on this Mac, so its backup tells the client instead
+detect_client() {
+    ACTUAL_HASH=""
+    CLIENT_BUILD=""
+    CLIENT_VERSION=""
+    UNPATCHED_HASH=""
+    [ -f "$GAME_BIN" ] || return 0
+    ACTUAL_HASH=$(sha1_file "$GAME_BIN")
+    lookup_client "$ACTUAL_HASH" || { [ -f "$GAME_BAK" ] && lookup_client "$(sha1_file "$GAME_BAK")"; }
+    return 0
+}
+
+# MISSING, UNKNOWN, PATCHED or UNPATCHED - about the executable only, not classicpatch.dylib
+client_state() {
+    if [ ! -f "$GAME_BIN" ]; then
+        echo "MISSING"
+    elif [ -z "$CLIENT_BUILD" ]; then
+        echo "UNKNOWN"
+    elif is_patched "$GAME_BIN"; then
+        echo "PATCHED"
+    elif [ "$ACTUAL_HASH" == "$UNPATCHED_HASH" ]; then
+        echo "UNPATCHED"
+    else
+        echo "UNKNOWN"
+    fi
+}
+
+patch_executable() {
+    strip_quarantine "$GAME_BIN"
+    if [ ! -f "$PATCH_SCRIPT" ]; then
+        echo "[!] patch_binary.sh not found at $PATCH_SCRIPT" >&2
+        abort_launch
+    fi
+
+    if [ -f "$GAME_BAK" ]; then
+        BACKUP_HASH=$(sha1_file "$GAME_BAK")
+        if [ "$BACKUP_HASH" != "$UNPATCHED_HASH" ]; then
+            echo "[!] Existing backup at $GAME_BAK doesn't match the expected unpatched client." >&2
+            abort_launch
+        fi
+    else
+        echo "[*] Creating backup..."
+        if ! cp "$GAME_BIN" "$GAME_BAK"; then
+            echo "[!] Failed to create the backup at $GAME_BAK" >&2
+            rm -f "$GAME_BAK"
+            abort_launch
+        fi
+    fi
+
+    # @executable_path is dyld's name for Contents/MacOS - the game folder can move
+    echo "[*] Patching the game binary..."
+    GAME_PATCH_TMP="${GAME_BIN}.patching"
+    rm -f "$GAME_PATCH_TMP"
+    # Patch a copy of the backup first to avoid corrupting
+    if cp "$GAME_BAK" "$GAME_PATCH_TMP" \
+        && /bin/bash "$PATCH_SCRIPT" "$GAME_PATCH_TMP" "@executable_path/../$CLASSICPATCH_SUBPATH" \
+        && is_patched "$GAME_PATCH_TMP" \
+        && chmod +x "$GAME_PATCH_TMP" \
+        && mv -f "$GAME_PATCH_TMP" "$GAME_BIN"; then
+        echo "[*] Patching successful!"
+    else
+        echo "[!] Failed to patch the binary." >&2
+        rm -f "$GAME_PATCH_TMP"
+        abort_launch
+    fi
+}
+
+# Puts or replaces classicpatch.dylib in the game app to be loaded by the patched binary
+install_classicpatch() {
+    if ! cmp -s "$PATCH_DIR_DYLIB" "$CLASSICPATCH_DYLIB"; then
+        if [ ! -f "$PATCH_DIR_DYLIB" ]; then
+            echo "[!] classicpatch.dylib not found at $PATCH_DIR_DYLIB" >&2
+            echo "    Build it with launcher/build/patch/build_classicpatch.sh (you may need Apple's Command Line Tools)." >&2
+            abort_launch
+        fi
+        echo "[*] Installing classicpatch.dylib..."
+        if ! mkdir -p "$(dirname "$CLASSICPATCH_DYLIB")" || ! cp -f "$PATCH_DIR_DYLIB" "$CLASSICPATCH_DYLIB"; then
+            echo "[!] Failed to install classicpatch.dylib into $CLASSICPATCH_DYLIB" >&2
+            abort_launch
+        fi
+    fi
+    strip_quarantine "$CLASSICPATCH_DYLIB"
+}
+
+print_expected_hashes() {
+    awk 'NF { printf "    Expected %s unpatched: %s\n", $1, $3 }' <<< "$CLIENTS" >&2
+}
 
 # --- Helpers ---
 sha1_file() {
@@ -92,10 +209,10 @@ validate_bnet_address() {
 
 set_portal() {
     local portal="$1"
-    if grep -q '^SET portal' "$WOW_CONFIG"; then
-        sed -i '' "s|^SET portal.*|SET portal \"$portal\"|g" "$WOW_CONFIG"
+    if grep -q '^SET portal' "$GAME_CONFIG"; then
+        sed -i '' "s|^SET portal.*|SET portal \"$portal\"|g" "$GAME_CONFIG"
     else
-        printf 'SET portal "%s"\n' "$portal" >> "$WOW_CONFIG"
+        printf 'SET portal "%s"\n' "$portal" >> "$GAME_CONFIG"
     fi
 }
 
@@ -151,7 +268,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --checkpatch           Print PATCHED, UNPATCHED, UNKNOWN, or MISSING, and exit"
             echo "  --patch                Patch the binary only, don't launch"
             echo "  --reset                Clear saved connection config and caches"
-            echo "  --getmissing [url]     Fetch an untouched 40618 client (prompts for a mirror if no url given)"
+            echo "  --getmissing [url]     Fetch an untouched 1.14 client (prompts for a mirror if no url given)"
             echo "  --bnet [ip[:port]]     Connect directly, bypassing the proxy (default ip: 127.0.0.1)"
             echo "  --switchproxy <name>   Use a custom proxy binary from the proxy/ folder"
             echo "  --config <file>        Pass a custom proxy configuration file"
@@ -159,31 +276,17 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --help, -h             Show this help"
             exit 0
             ;;
+        --checkpatch)
+            CHECK_PATCH=true
+            shift
+            ;;
         --game)
-            # Already applied in the path definitions
+            # BASE_DIR is already set, in the path definitions
             if [[ -n "$2" && ! "$2" =~ ^-- ]] && [ -d "$2" ]; then
                 shift 2
             else
                 echo "[!] --game requires an existing game folder (the one that holds _classic_era_)." >&2
                 exit 1
-            fi
-            ;;
-        --checkpatch)
-            if [ -f "$WOW_BIN" ]; then
-                ACTUAL_HASH=$(sha1_file "$WOW_BIN")
-                if [ "$ACTUAL_HASH" == "$PATCHED_HASH" ]; then
-                    echo "PATCHED"
-                    exit 0
-                elif [ "$ACTUAL_HASH" == "$UNPATCHED_HASH" ]; then
-                    echo "UNPATCHED"
-                    exit 1
-                else
-                    echo "UNKNOWN"
-                    exit 2
-                fi
-            else
-                echo "MISSING"
-                exit 3
             fi
             ;;
         --reset)
@@ -262,6 +365,23 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
+detect_client
+
+# --checkpatch: print the state and exit - PATCHED also needs classicpatch.dylib in place
+if [ "$CHECK_PATCH" = true ]; then
+    CLIENT_STATE=$(client_state)
+    if [ "$CLIENT_STATE" == "PATCHED" ] && [ ! -f "$CLASSICPATCH_DYLIB" ]; then
+        CLIENT_STATE=UNPATCHED
+    fi
+    echo "$CLIENT_STATE"
+    case "$CLIENT_STATE" in
+        PATCHED) exit 0 ;;
+        UNPATCHED) exit 1 ;;
+        UNKNOWN) exit 2 ;;
+        *) exit 3 ;;
+    esac
+fi
+
 # Compiled.app-only, build_launcher.sh fills this in
 # WITHIN_APP:close_window:start
 # WITHIN_APP:close_window:end
@@ -274,7 +394,7 @@ abort_launch() {
 }
 
 echo "======================================="
-echo "WoW Classic 1.14.x - Patcher & Launcher"
+echo "   Classic 1.14 - Patcher & Launcher  "
 echo "======================================="
 
 # Only used if the client turns out to be missing below
@@ -288,8 +408,8 @@ run_get_client() {
     chmod +x "$SURGE_BIN" 2>/dev/null
 
     # Normally only reachable via --getmissing on an existing install (CLI only)
-    if [ -f "$WOW_BIN" ]; then
-        echo "[!] A client already exists at $WOW_BIN" >&2
+    if [ -f "$GAME_BIN" ]; then
+        echo "[!] A client already exists at $GAME_BIN" >&2
         echo "    --getmissing is only for an initial, empty install. Remove client files first" >&2
         echo "    if you really want to fetch it again." >&2
         abort_launch
@@ -402,12 +522,12 @@ run_get_client() {
     fi
 
     # Mirrors wrap this differently - find whichever folder actually holds the client
-    WOW_BIN_SUBPATH="${WOW_BIN#"$BASE_DIR/"}"
+    GAME_BIN_SUBPATH="${GAME_BIN#"$BASE_DIR/"}"
     EXTRACTED_ROOT="$GET_TMP/extracted"
-    if [ ! -f "$EXTRACTED_ROOT/$WOW_BIN_SUBPATH" ] || [ ! -d "$EXTRACTED_ROOT/Data" ]; then
+    if [ ! -f "$EXTRACTED_ROOT/$GAME_BIN_SUBPATH" ] || [ ! -d "$EXTRACTED_ROOT/Data" ]; then
         EXTRACTED_ROOT=""
         for entry in "$GET_TMP/extracted"/*/; do
-            [ -f "${entry}${WOW_BIN_SUBPATH}" ] && [ -d "${entry}Data" ] && EXTRACTED_ROOT="${entry%/}" && break
+            [ -f "${entry}${GAME_BIN_SUBPATH}" ] && [ -d "${entry}Data" ] && EXTRACTED_ROOT="${entry%/}" && break
         done
     fi
     if [ -z "$EXTRACTED_ROOT" ]; then
@@ -435,73 +555,46 @@ if [ "$GET_MISSING" = true ]; then
     exit 0
 fi
 
-if [ ! -f "$WOW_BIN" ]; then
-    echo "[!] WoW binary not found at $WOW_BIN" >&2
+if [ ! -f "$GAME_BIN" ]; then
+    echo "[!] Game binary not found at $GAME_BIN" >&2
     echo ""
     echo "====== Get missing client files ======="
-    echo "  [Yes] -> Fetch the 1.14.0 client"
+    echo "  [Yes] -> Fetch a 1.14 client"
     echo "   No   -> Exit, fetch it manually later"
     echo "======================================="
-    read -p "Fetch the 40618 client now? [Y/n]: " GET_MISSING_INPUT
+    read -p "Fetch a 1.14 client now? [Y/n]: " GET_MISSING_INPUT
     if [[ -z "$GET_MISSING_INPUT" ]] || [[ "$GET_MISSING_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
         run_get_client
     fi
-    if [ ! -f "$WOW_BIN" ]; then
+    if [ ! -f "$GAME_BIN" ]; then
         abort_launch
     fi
+    # Only known now
+    detect_client
 fi
 
 # 2. Check Backup and Patch status
-ACTUAL_HASH=$(sha1_file "$WOW_BIN")
-if [ "$ACTUAL_HASH" == "$PATCHED_HASH" ]; then
-    echo "[*] WoW binary is already patched. Skipping patch phase."
-elif [ "$ACTUAL_HASH" == "$UNPATCHED_HASH" ]; then
-    echo "[*] Unpatched WoW binary detected. Initializing patch process..."
-    strip_quarantine "$WOW_BIN" "$LAUNCHER_DIR/xdelta3"
-    chmod +x "$WOW_BIN" "$XDELTA_BIN" 2>/dev/null
-    if [ ! -f "$PATCH_FILE" ]; then
-        echo "[!] Patch file not found at $PATCH_FILE" >&2
+case "$(client_state)" in
+    PATCHED)
+        echo "[*] Game binary is already patched. Skipping patch phase."
+        ;;
+    UNPATCHED)
+        echo "[*] Unpatched game binary detected. Initializing patch process..."
+        patch_executable
+        ;;
+    *)
+        # Read from Supported Clients
+        echo "[!] Patcher is expecting Classic 1.14.0 (40618) or 1.14.2 (42597)" >&2
+        echo "    Current file hash: $ACTUAL_HASH" >&2
+        print_expected_hashes
         abort_launch
-    fi
-
-    if [ -f "$WOW_BAK" ]; then
-        BACKUP_HASH=$(sha1_file "$WOW_BAK")
-        if [ "$BACKUP_HASH" != "$UNPATCHED_HASH" ]; then
-            echo "[!] Existing backup at $WOW_BAK doesn't match the expected unpatched client." >&2
-            abort_launch
-        fi
-    else
-        echo "[*] Creating backup..."
-        cp "$WOW_BIN" "$WOW_BAK"
-    fi
-
-    # Patch into a temp file first, so a crash mid-patch can't corrupt $WOW_BIN
-    echo "[*] Patching WoW binary..."
-    WOW_PATCH_TMP="${WOW_BIN}.patching"
-    rm -f "$WOW_PATCH_TMP"
-    "$XDELTA_BIN" -d -f -s "$WOW_BAK" "$PATCH_FILE" "$WOW_PATCH_TMP"
-    XDELTA_STATUS=$?
-
-    if [ $XDELTA_STATUS -eq 0 ] && [ -f "$WOW_PATCH_TMP" ] && [ "$(sha1_file "$WOW_PATCH_TMP")" == "$PATCHED_HASH" ]; then
-        chmod +x "$WOW_PATCH_TMP"
-        mv -f "$WOW_PATCH_TMP" "$WOW_BIN"
-        echo "[*] Patching successful!"
-    else
-        echo "[!] Failed to patch the binary." >&2
-        rm -f "$WOW_PATCH_TMP"
-        abort_launch
-    fi
-else
-    echo "[!] Patcher is expecting WoW Classic 1.14.0 (40618)" >&2
-    echo "    Current file hash: $ACTUAL_HASH" >&2
-    echo "    Expected unpatched: $UNPATCHED_HASH" >&2
-    echo "    Expected patched: $PATCHED_HASH" >&2
-    abort_launch
-fi
+        ;;
+esac
+install_classicpatch
 
 # Ensure WTF directory exists for config
-mkdir -p "$WOW_WTF_DIR"
-touch "$WOW_CONFIG"
+mkdir -p "$GAME_WTF_DIR"
+touch "$GAME_CONFIG"
 
 # 3. Handle User Configuration
 # No point reading a config --reset is about to delete, and --patch never needs it
@@ -536,8 +629,8 @@ if [ "$RESET" = true ]; then
     rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
     set_portal "127.0.0.1"
     # Manual escape hatch - everything below is normally only touched on first use
-    strip_quarantine "$WOW_BIN" "$LAUNCHER_DIR/xdelta3" "$LAUNCHER_DIR/surge" "$PROXY_DIR" "$OPENSSL_DIR"
-    chmod +x "$WOW_BIN" "$XDELTA_BIN" "$SURGE_BIN" "$PROXY_BIN" 2>/dev/null
+    strip_quarantine "$GAME_BIN" "$LAUNCHER_DIR/surge" "$PROXY_DIR" "$OPENSSL_DIR"
+    chmod +x "$GAME_BIN" "$SURGE_BIN" "$PROXY_BIN" 2>/dev/null
 fi
 
 # --patch stops here - --reset carries on into the connection setup below
@@ -625,12 +718,11 @@ else
 fi
 
 # Apply the loaded/saved configuration
-
 if [ "$CONNECTION_TYPE" = "PROXY" ]; then
     LAUNCH_PROXY=true
 
     # Update Game Config to Proxy IP
-    echo "[*] Configuring WoW to connect to local Proxy (127.0.0.1)..."
+    echo "[*] Configuring the game to connect to local Proxy (127.0.0.1)..."
     set_portal "127.0.0.1"
 
     # Determine Proxy Binary
@@ -650,7 +742,7 @@ if [ "$CONNECTION_TYPE" = "PROXY" ]; then
     fi
 
     # Add Default Client Build
-    PROXY_COMMAND+=("--set" "ClientBuild=40618")
+    PROXY_COMMAND+=("--set" "ClientBuild=$CLIENT_BUILD")
 
     # Ensure a ServerAddress is present if no config file is passed
     if [ -z "$PROXY_CONFIG_FILE" ]; then
@@ -682,7 +774,7 @@ if [ "$CONNECTION_TYPE" = "PROXY" ]; then
     done
 
 elif [ "$CONNECTION_TYPE" = "DIRECT" ]; then
-    echo "[*] Configuring WoW to connect directly to $SAVED_IP..."
+    echo "[*] Configuring the game to connect directly to $SAVED_IP..."
     set_portal "$SAVED_IP"
 fi
 
@@ -740,21 +832,21 @@ if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
 
     # Watch the game from its own subshell - exec below stops this from reaping it
     (
-        echo "[*] Launching World of Warcraft Classic..."
+        echo "[*] Launching the game..."
         echo "======================================="
 
-        nohup "$WOW_BIN" > /dev/null 2>&1 &
-        WOW_PID=$!
+        nohup "$GAME_BIN" > /dev/null 2>&1 &
+        GAME_PID=$!
 
-        while kill -0 "$WOW_PID" 2>/dev/null; do
+        while kill -0 "$GAME_PID" 2>/dev/null; do
             sleep 2
         done
         # Another account may still be using this proxy - match by path, not just name
-        if pgrep -f "$WOW_BIN" > /dev/null 2>&1; then
+        if pgrep -f "$GAME_BIN" > /dev/null 2>&1; then
             echo ""
             echo "[*] Game closed, but another client is still connected."
             echo "    Leaving the proxy running."
-            while pgrep -f "$WOW_BIN" > /dev/null 2>&1 && kill -0 $$ 2>/dev/null; do
+            while pgrep -f "$GAME_BIN" > /dev/null 2>&1 && kill -0 $$ 2>/dev/null; do
                 sleep 2
             done
         fi
@@ -769,10 +861,10 @@ if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
     # Stdin from /dev/null - "Press enter to close" won't hang with no tty to read
     exec "${FULL_PROXY_CMD[@]}" < /dev/null
 else
-    echo "[*] Launching World of Warcraft Classic..."
+    echo "[*] Launching the game..."
     echo "======================================="
 
-    nohup "$WOW_BIN" > /dev/null 2>&1 &
+    nohup "$GAME_BIN" > /dev/null 2>&1 &
 
     after_game_launched
 fi

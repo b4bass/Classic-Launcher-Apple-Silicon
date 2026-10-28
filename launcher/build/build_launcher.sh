@@ -6,7 +6,9 @@ BASE_DIR="$(dirname "$LAUNCHER_DIR")"                      # game folder
 APP_NAME="Classic Era Launcher"
 APP_OUT="$BASE_DIR/$APP_NAME.app"
 ICON_PNG="$BUILD_DIR/wow.png"
-PATCH_FILE="$BUILD_DIR/patch/40618.patch"
+PATCH_DIR="$BUILD_DIR/patch"                               # launcher/build/patch/
+# What the app needs from the patch folder: the library, the script that patches the game binary, Arctium's license
+PATCH_FILES=("$PATCH_DIR/classicpatch.dylib" "$PATCH_DIR/patch_binary.sh" "$PATCH_DIR/LICENSE-Arctium.txt")
 
 # Private, per-build scratch space instead of predictable /tmp paths
 BUILD_TMP="$(mktemp -d)"
@@ -15,14 +17,18 @@ ICONSET="$BUILD_TMP/wow.iconset"
 ICON_ICNS="$BUILD_TMP/wow.icns"
 
 # 0. Make sure the tools and source files we depend on are actually here
-for cmd in sips iconutil osacompile codesign awk rsync; do
+for cmd in sips iconutil osacompile codesign awk rsync plutil; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "[!] Required command not found: $cmd" >&2; exit 1; }
 done
 [ -x /usr/libexec/PlistBuddy ] || { echo "[!] Required tool not found: /usr/libexec/PlistBuddy" >&2; exit 1; }
 [ -f "$ICON_PNG" ] || { echo "[!] Icon source not found at $ICON_PNG" >&2; exit 1; }
-[ -f "$PATCH_FILE" ] || { echo "[!] Patch file not found at $PATCH_FILE" >&2; exit 1; }
+if [ ! -f "$PATCH_DIR/classicpatch.dylib" ]; then
+    /bin/bash "$PATCH_DIR/build_classicpatch.sh" || exit 1
+fi
+for f in "${PATCH_FILES[@]}"; do
+    [ -f "$f" ] || { echo "[!] Patch file not found at $f" >&2; exit 1; }
+done
 [ -f "$LAUNCHER_DIR/launch.sh" ] || { echo "[!] launch.sh not found at $LAUNCHER_DIR/launch.sh" >&2; exit 1; }
-[ -f "$LAUNCHER_DIR/xdelta3/bin/xdelta3" ] || { echo "[!] xdelta3 binary not found at $LAUNCHER_DIR/xdelta3/bin/xdelta3" >&2; exit 1; }
 [ -f "$LAUNCHER_DIR/proxy/HermesProxy" ] || { echo "[!] HermesProxy binary not found at $LAUNCHER_DIR/proxy/HermesProxy" >&2; exit 1; }
 [ -f "$LAUNCHER_DIR/surge/surge" ] || { echo "[!] surge binary not found at $LAUNCHER_DIR/surge/surge" >&2; exit 1; }
 [ -d "$LAUNCHER_DIR/openssl-3.0.7" ] || { echo "[!] openssl-3.0.7 folder not found at $LAUNCHER_DIR/openssl-3.0.7" >&2; exit 1; }
@@ -56,15 +62,32 @@ osacompile -o "$APP_OUT" "$BUILD_TMP/launcher.applescript" \
     || { echo "[!] osacompile failed to produce the .app." >&2; exit 1; }
 
 # 4. Copy content into the app bundle so it's self-contained
-# Everything but the build folder (of which the app only needs the patch file), the proxy's own logs and account
-# data, and Finder metadata junk
+# Everything but the build folder (of which the app only needs PATCH_FILES), the proxy's own logs and account data,
+# and Finder metadata junk
 echo "[*] Including launcher content in bundle..."
 rsync -a --exclude '/build/' --exclude '/proxy/Logs/' --exclude '/proxy/PacketsLog/' --exclude '/proxy/AccountData/' \
     --exclude '/proxy/appsettings.Development.json' --exclude '.DS_Store' \
     "$LAUNCHER_DIR/" "$APP_OUT/Contents/Resources/" || { echo "[!] Failed to copy launcher content." >&2; exit 1; }
 mkdir -p "$APP_OUT/Contents/Resources/build/patch" \
-    && cp "$PATCH_FILE" "$APP_OUT/Contents/Resources/build/patch/" \
-    || { echo "[!] Failed to copy the patch file." >&2; exit 1; }
+    && cp "${PATCH_FILES[@]}" "$APP_OUT/Contents/Resources/build/patch/" \
+    || { echo "[!] Failed to copy the patch files." >&2; exit 1; }
+
+# Quieter HermesProxy logging in the app only - the launcher folder keeps Hermes's defaults
+# Edited in place to keep the file's layout, then checked
+APP_PROXY_CONF="$APP_OUT/Contents/Resources/proxy/appsettings.json"
+sed -i '' -E \
+    -e 's/("ToFile": *)true/\1false/' \
+    -e 's/("ConsoleLevel": *)"[A-Za-z]+"/\1"Warning"/' \
+    -e 's/("PacketLevel": *)"[A-Za-z]+"/\1"Error"/' \
+    -e 's/("PacketsLog": *)true/\1false/' \
+    "$APP_PROXY_CONF"
+if [ "$(plutil -extract LoggingOptions.ToFile raw "$APP_PROXY_CONF" 2>/dev/null)" != "false" ] \
+    || [ "$(plutil -extract LoggingOptions.ConsoleLevel raw "$APP_PROXY_CONF" 2>/dev/null)" != "Warning" ] \
+    || [ "$(plutil -extract LoggingOptions.PacketLevel raw "$APP_PROXY_CONF" 2>/dev/null)" != "Error" ] \
+    || [ "$(plutil -extract DiagnosticsOptions.PacketsLog raw "$APP_PROXY_CONF" 2>/dev/null)" != "false" ]; then
+    echo "[!] Failed to set the proxy's log settings in $APP_PROXY_CONF" >&2
+    exit 1
+fi
 
 # 5. Swap in the app's own proxy/window behavior (see WITHIN_APP markers in launch.sh)
 LAUNCH_SH="$APP_OUT/Contents/Resources/launch.sh"
@@ -136,8 +159,8 @@ override_block on_game_closed "$BUILD_TMP/body_on_game_closed.sh"
 # Sanity check - warn (don't fail the build) if something didn't take
 grep -q "^close_window()" "$LAUNCH_SH" || echo "[!] close_window() wasn't inserted into launch.sh."
 
-# 6. Inject the WoW icon
-echo "[*] Injecting WoW icon..."
+# 6. Inject the icon
+echo "[*] Injecting icon..."
 cp "$ICON_ICNS" "$APP_OUT/Contents/Resources/wow.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile wow" "$APP_OUT/Contents/Info.plist" 2>/dev/null || \
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string wow" "$APP_OUT/Contents/Info.plist"
