@@ -61,7 +61,13 @@ rm -rf "$APP_OUT"
 osacompile -o "$APP_OUT" "$BUILD_TMP/launcher.applescript" \
     || { echo "[!] osacompile failed to produce the .app." >&2; exit 1; }
 
-# 4. Copy content into the app bundle so it's self-contained
+# 4. Inject the icon
+echo "[*] Injecting icon..."
+cp "$ICON_ICNS" "$APP_OUT/Contents/Resources/wow.icns"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIconFile wow" "$APP_OUT/Contents/Info.plist" 2>/dev/null || \
+/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string wow" "$APP_OUT/Contents/Info.plist"
+
+# 5. Copy content into the app bundle so it's self-contained
 # Everything but the build folder (of which the app only needs PATCH_FILES), the proxy's own logs and account data,
 # and Finder metadata junk
 echo "[*] Including launcher content in bundle..."
@@ -89,7 +95,7 @@ if [ "$(plutil -extract LoggingOptions.ToFile raw "$APP_PROXY_CONF" 2>/dev/null)
     exit 1
 fi
 
-# 5. Swap in the app's own proxy/window behavior (see WITHIN_APP markers in launch.sh)
+# 6. Swap in the app's own proxy/window behavior (see WITHIN_APP markers in launch.sh)
 LAUNCH_SH="$APP_OUT/Contents/Resources/launch.sh"
 
 # Replaces the content between a WITHIN_APP:$name:start/end marker pair
@@ -158,12 +164,6 @@ override_block on_game_closed "$BUILD_TMP/body_on_game_closed.sh"
 
 # Sanity check - warn (don't fail the build) if something didn't take
 grep -q "^close_window()" "$LAUNCH_SH" || echo "[!] close_window() wasn't inserted into launch.sh."
-
-# 6. Inject the icon
-echo "[*] Injecting icon..."
-cp "$ICON_ICNS" "$APP_OUT/Contents/Resources/wow.icns"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIconFile wow" "$APP_OUT/Contents/Info.plist" 2>/dev/null || \
-/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string wow" "$APP_OUT/Contents/Info.plist"
 
 # 7. Re-sign after modifying the bundle
 echo "[*] Re-signing..."
