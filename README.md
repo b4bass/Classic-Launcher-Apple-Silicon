@@ -36,6 +36,7 @@ At each startup, the library patches the client in memory, modifying the server 
 It expects the unpatched sha1 checksum:
 
 - 1.14.0 (40618): `200c4c54316fb801d6d4d07d7031bb2b43f1c2be`
+- 1.14.1 (42032): `bff00e04f1a02ecf4b8410d5796eddda1dc24afc`
 - 1.14.2 (42597): `638233fd384602862e41590e4b0213242c82257f`
 
 <br />

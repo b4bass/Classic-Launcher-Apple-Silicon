@@ -6,7 +6,7 @@
  *
  *   1. The constructor runs before any client code and patches the plaintext data in __TEXT (__const/__cstring):
  *        ConnectTo + GameCrypto RSA modulus, certificate signature modulus, certificate bundle (Arctium data),
- *        ".actual.battle.net" portal suffix, TACT versions URL.
+ *        ".actual.battle.net" portal suffix, TACT versions URL (Arctium's server, with the client's own build).
  *   2. The client's __TEXT,__text is encrypted on disk and decrypts itself during start-up. A background thread waits
  *      for that, suspends the other threads, FINDS the three code sites by pattern (no fixed addresses, so later
  *      builds may work unchanged) and patches them:
@@ -53,7 +53,9 @@ static const uint8_t P_CRYPTORSAMODULUS[8] = { 0x71, 0xFD, 0xFA, 0x60, 0x14, 0x0
 static const char S_CERTBUNDLE[] = "{\"Created\":";
 static const char S_PORTAL[] = ".actual.battle.net";                               /* + its NUL */
 static const char S_VERSIONS[] = "http://%s.patch.battle.net:1119/%s/versions";
-static const char S_VERSIONS_NEW[] = "http://ngdp.arctium.io/%s/%s/42597/versions";  /* same length, as in the 1.14.0 patch */
+/* Arctium's versions server answers for one build: the client's own goes in (5 digits keep the length) */
+#define VERSIONS_NEW_FMT "http://ngdp.arctium.io/%%s/%%s/%s/versions"
+_Static_assert(sizeof "http://ngdp.arctium.io/%s/%s/00000/versions" == sizeof S_VERSIONS, "versions URL must keep its length");
 static const char S_COMMONNAME[] = "Could not validate common name. ";
 
 static intptr_t g_slide;
@@ -469,12 +471,21 @@ static void *watch(void *arg) {
     return NULL;
 }
 
+static char g_clientVersion[64] = "?";          /* CFBundleVersion, e.g. 1.14.1.42032 */
+
 static void log_version(void) {
-    char ver[64] = "?";
     CFBundleRef b = CFBundleGetMainBundle();
     CFTypeRef v = b ? CFBundleGetValueForInfoDictionaryKey(b, CFSTR("CFBundleVersion")) : NULL;
-    if (v && CFGetTypeID(v) == CFStringGetTypeID()) CFStringGetCString((CFStringRef)v, ver, sizeof ver, kCFStringEncodingUTF8);
-    say("classicpatch (%s) in client %s, image slide 0x%lx", ARCH_NAME, ver, (long)g_slide);
+    if (v && CFGetTypeID(v) == CFStringGetTypeID())
+        CFStringGetCString((CFStringRef)v, g_clientVersion, sizeof g_clientVersion, kCFStringEncodingUTF8);
+    say("classicpatch (%s) in client %s, image slide 0x%lx", ARCH_NAME, g_clientVersion, (long)g_slide);
+}
+
+/* The versions URL with the client's build, or 0 if its build is not 5 digits */
+static int versions_url(char *out, size_t n) {
+    const char *dot = strrchr(g_clientVersion, '.');
+    if (!dot || strlen(dot + 1) != 5 || strspn(dot + 1, "0123456789") != 5) return 0;
+    return snprintf(out, n, VERSIONS_NEW_FMT, dot + 1) == (int)n - 1;
 }
 
 /* default log: <folder that holds the .app>/Logs/classicpatch.log, i.e. _classic_era_/Logs/classicpatch.log */
@@ -540,8 +551,10 @@ static void classicpatch_init(void) {
     ok &= data_patch("Certificate Bundle", S_CERTBUNDLE, sizeof S_CERTBUNDLE - 1, ARC_CERT_BUNDLE, sizeof ARC_CERT_BUNDLE, NULL);
     static const uint8_t zeros[sizeof S_PORTAL - 1] = { 0 };
     ok &= data_patch("Login Portal", S_PORTAL, sizeof S_PORTAL, zeros, sizeof zeros, NULL);
-    _Static_assert(sizeof S_VERSIONS == sizeof S_VERSIONS_NEW, "versions URL must keep its length");
-    if (!data_patch("Versions URL", S_VERSIONS, sizeof S_VERSIONS, S_VERSIONS_NEW, sizeof S_VERSIONS_NEW, NULL))
+    char versions[sizeof S_VERSIONS];
+    if (!versions_url(versions, sizeof versions))
+        say("[Versions URL] no 5-digit build in %s - optional, continuing", g_clientVersion);
+    else if (!data_patch("Versions URL", S_VERSIONS, sizeof S_VERSIONS, versions, sizeof versions, NULL))
         say("[Versions URL] optional - continuing");
     if (!ok || !sig) { say("a data patch failed - code patches skipped, the client will not connect to a custom server"); return; }
     g_sigSlot = (uint64_t)((uintptr_t)sig - g_slide);
