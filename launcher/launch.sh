@@ -57,6 +57,19 @@ CLIENTS="
 1.14.2 42597 638233fd384602862e41590e4b0213242c82257f
 "
 
+# ask_yes "Question?": Enter, y or yes = yes; n or no = no; anything else asks again
+ask_yes() {
+    local answer
+    while true; do
+        read -r -p "$1 [Y/n]: " answer
+        case "$answer" in
+            ""|[Yy]|[Yy][Ee][Ss]) return 0 ;;
+            [Nn]|[Nn][Oo]) return 1 ;;
+            *) echo "[!] Invalid selection." >&2 ;;
+        esac
+    done
+}
+
 # --- Client Detection and Patching ---
 # Sets CLIENT_BUILD, CLIENT_VERSION, UNPATCHED_HASH for a known original sha1
 lookup_client() {
@@ -270,7 +283,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --patch                Patch the binary only, don't launch"
             echo "  --reset                Clear saved connection config and caches"
             echo "  --getmissing [url]     Fetch an untouched 1.14 client (prompts for a mirror if no url given)"
-            echo "  --bnet [ip[:port]]     Connect directly, bypassing the proxy (default ip: 127.0.0.1)"
+            echo "  --bnet [ip[:port]]     Connect directly, bypassing the Connection Proxy (default ip: 127.0.0.1)"
             echo "  --switchproxy <name>   Use a custom proxy binary from the proxy/ folder"
             echo "  --config <file>        Pass a custom proxy configuration file"
             echo "  --set <key=value>      Pass a proxy override, repeatable"
@@ -417,7 +430,7 @@ run_get_client() {
     fi
 
     if pgrep -x "$(basename "$SURGE_BIN")" > /dev/null 2>&1; then
-        echo "[*] A download is already in progress - wait for it to finish, then retry."
+        echo "[!] A download is already in progress - wait for it to finish, then retry." >&2
         abort_launch
     fi
 
@@ -445,15 +458,16 @@ run_get_client() {
             SELECTED_URL="${MIRRORS[0]}"
         else
             echo ""
-            echo "Select a mirror:"
+            echo "=========== Choose a mirror ==========="
             for i in "${!MIRRORS[@]}"; do
                 echo "  $((i + 1))) ${MIRRORS[$i]}"
             done
-            read -p "Enter choice [1-${#MIRRORS[@]}]: " MIRROR_CHOICE
-            if ! [[ "$MIRROR_CHOICE" =~ ^[0-9]+$ ]] || [ "$MIRROR_CHOICE" -lt 1 ] || [ "$MIRROR_CHOICE" -gt "${#MIRRORS[@]}" ]; then
+            echo "======================================="
+            while true; do
+                read -r -p "Enter choice [1-${#MIRRORS[@]}]: " MIRROR_CHOICE || abort_launch
+                [[ "$MIRROR_CHOICE" =~ ^[0-9]+$ ]] && [ "$MIRROR_CHOICE" -ge 1 ] && [ "$MIRROR_CHOICE" -le "${#MIRRORS[@]}" ] && break
                 echo "[!] Invalid selection." >&2
-                abort_launch
-            fi
+            done
             SELECTED_URL="${MIRRORS[$((MIRROR_CHOICE - 1))]}"
         fi
     fi
@@ -563,8 +577,7 @@ if [ ! -f "$GAME_BIN" ]; then
     echo "  [Yes] -> Fetch a 1.14 client"
     echo "   No   -> Exit, fetch it manually later"
     echo "======================================="
-    read -p "Fetch a 1.14 client now? [Y/n]: " GET_MISSING_INPUT
-    if [[ -z "$GET_MISSING_INPUT" ]] || [[ "$GET_MISSING_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+    if ask_yes "Fetch a 1.14 client now?"; then
         run_get_client
     fi
     if [ ! -f "$GAME_BIN" ]; then
@@ -585,7 +598,7 @@ case "$(client_state)" in
         ;;
     *)
         # Read from Supported Clients
-        echo "[!] Patcher is expecting Classic 1.14.0 (40618), 1.14.1 (42032) or 1.14.2 (42597)" >&2
+        echo "[!] Patcher is expecting Classic 1.14.0 (40618), 1.14.1 (42032) or 1.14.2 (42597)." >&2
         echo "    Current file hash: $ACTUAL_HASH" >&2
         print_expected_hashes
         abort_launch
@@ -607,14 +620,13 @@ if [ "$RESET" = false ] && [ "$PATCH_ONLY" = false ]; then
         echo "[*] Loading saved configuration from connect.conf..."
     # Nothing usable - reset below, unless arguments will overwrite it anyway
     elif [ "$CONF_STATE" -eq 2 ] && [ -z "$DIRECT_BNET_IP" ] && [ "$PROXY_ARGS_PASSED" = false ]; then
-        echo "[!] connect.conf holds no usable settings."
+        echo "[!] connect.conf holds no usable settings." >&2
         echo ""
         echo "==== Invalid Launcher Config File ====="
         echo "  [Yes] -> Reset the configuration"
         echo "   No   -> Exit, fix or delete connect.conf yourself"
         echo "======================================="
-        read -p "Reset connect.conf now? [Y/n]: " RESET_CONF_INPUT
-        if [[ -z "$RESET_CONF_INPUT" ]] || [[ "$RESET_CONF_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        if ask_yes "Reset connect.conf now?"; then
             RESET=true
         else
             echo "[!] Left the file as it is: $USER_CONF" >&2
@@ -649,7 +661,7 @@ if [ -n "$DIRECT_BNET_IP" ]; then
         SAVED_USE_PROXY=false
         SAVED_IP="$DIRECT_BNET_IP"
         save_config
-        echo "[*] Updated connect.conf: Switched to Direct Connection ($SAVED_IP)."
+        echo "[*] Updated connect.conf: switched to a direct connection ($SAVED_IP)."
     fi
 
 # If user passed Proxy arguments. Force Proxy.
@@ -671,7 +683,7 @@ elif [ "$PROXY_ARGS_PASSED" = true ]; then
         SAVED_USE_PROXY=true
         SAVED_IP="$NEW_SAVED_IP"
         save_config
-        echo "[*] Updated connect.conf: Switched to Proxy Connection ($SAVED_IP)."
+        echo "[*] Updated connect.conf: switched to the Connection Proxy ($SAVED_IP)."
     fi
 
 # If normal run (No overriding arguments)
@@ -687,34 +699,33 @@ else
         echo "  [Yes] -> via Connection Proxy  (for legacy/private servers)"
         echo "   No   -> Direct                (for servers with native client support)"
         echo "======================================="
-        read -p "Connect via Connection Proxy? [Y/n]: " USE_PROXY_INPUT
-
-        # Matches y, Y, yes, Yes, or empty string (defaults to Yes)
-        if [[ -z "$USE_PROXY_INPUT" ]] || [[ "$USE_PROXY_INPUT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        if ask_yes "Connect via Connection Proxy?"; then
             CONNECTION_TYPE="PROXY"
             SAVED_USE_PROXY=true
-            echo "Example: logon.example.com or 127.0.0.1"
-            read -p "Enter realmlist server address: " INPUT_IP
+            echo "    Example: logon.example.com or 127.0.0.1"
         else
             CONNECTION_TYPE="DIRECT"
             SAVED_USE_PROXY=false
-            echo "Example: 127.0.0.1 or 127.0.0.1:1119"
-            read -p "Enter bnetserver IP: " INPUT_IP
+            echo "    Example: 127.0.0.1 or 127.0.0.1:1119"
         fi
-
-        SAVED_IP=${INPUT_IP:-127.0.0.1}
-        if [ "$CONNECTION_TYPE" = "DIRECT" ]; then
-            if ! validate_bnet_address "$SAVED_IP"; then
+        # Enter = 127.0.0.1, a wrong address asks again
+        while true; do
+            if [ "$CONNECTION_TYPE" = "PROXY" ]; then
+                read -r -p "Enter realmlist server address [127.0.0.1]: " INPUT_IP
+                SAVED_IP=${INPUT_IP:-127.0.0.1}
+                validate_server_address "$SAVED_IP" && break
+                echo "[!] '$SAVED_IP' is not a valid IP or hostname." >&2
+            else
+                read -r -p "Enter native bnetserver [127.0.0.1]: " INPUT_IP
+                SAVED_IP=${INPUT_IP:-127.0.0.1}
+                validate_bnet_address "$SAVED_IP" && break
                 echo "[!] '$SAVED_IP' is not a valid IP, hostname, or host:port." >&2
-                abort_launch
             fi
-        elif ! validate_server_address "$SAVED_IP"; then
-            echo "[!] '$SAVED_IP' is not a valid IP or hostname." >&2
-            abort_launch
-        fi
+        done
         # Save to file
         save_config
-        echo "[*] Settings saved to connect.conf. Use ./launch.sh --reset to change them later."
+        echo "[*] Settings saved to connect.conf."
+        echo "    To change them later, run launch.sh --reset or delete connect.conf in the game folder."
     fi
 fi
 
@@ -723,7 +734,7 @@ if [ "$CONNECTION_TYPE" = "PROXY" ]; then
     LAUNCH_PROXY=true
 
     # Update Game Config to Proxy IP
-    echo "[*] Configuring the game to connect to local Proxy (127.0.0.1)..."
+    echo "[*] Configuring the game to connect to the Connection Proxy (127.0.0.1)..."
     set_portal "127.0.0.1"
 
     # Determine Proxy Binary
@@ -789,11 +800,8 @@ PROXY_PROC_NAME=$(basename "$PROXY_BIN")
 # CLI default prompts interactively - the built .app reuses silently
 proxy_already_running() {
     # WITHIN_APP:proxy_already_running:start
-    read -p "A proxy is already running. Keep it running? [Y/n]: " KEEP_RUNNING
-    [[ -z "$KEEP_RUNNING" ]] && KEEP_RUNNING="Y"
-
-    if [[ "$KEEP_RUNNING" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-        echo "[*] Keeping the existing proxy running."
+    if ask_yes "The Connection Proxy is already running. Keep it running?"; then
+        echo "[*] Keeping the Connection Proxy running."
         START_PROXY=false
     else
         killall "$PROXY_PROC_NAME" 2>/dev/null
@@ -807,7 +815,7 @@ on_game_closed() {
     # WITHIN_APP:on_game_closed:start
     if kill -0 $$ 2>/dev/null; then
         echo ""
-        echo "[*] Game closed. Proxy is still running - Ctrl+C to stop it."
+        echo "[*] Game closed. The Connection Proxy is still running - Ctrl+C to stop it."
     fi
     # WITHIN_APP:on_game_closed:end
 }
@@ -828,7 +836,7 @@ if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
     strip_quarantine "$PROXY_DIR" "$OPENSSL_DIR"
     chmod +x "$PROXY_BIN" 2>/dev/null
 
-    echo "[*] Executing proxy command: ${FULL_PROXY_CMD[*]}"
+    echo "[*] Executing Connection Proxy command: ${FULL_PROXY_CMD[*]}"
     echo "[*] Connection Proxy running..."
 
     # Watch the game from its own subshell - exec below stops this from reaping it
@@ -846,7 +854,7 @@ if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
         if pgrep -f "$GAME_BIN" > /dev/null 2>&1; then
             echo ""
             echo "[*] Game closed, but another client is still connected."
-            echo "    Leaving the proxy running."
+            echo "    Leaving the Connection Proxy running."
             while pgrep -f "$GAME_BIN" > /dev/null 2>&1 && kill -0 $$ 2>/dev/null; do
                 sleep 2
             done

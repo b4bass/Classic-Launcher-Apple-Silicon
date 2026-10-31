@@ -1,2 +1,2 @@
 https://github.com/Xian55/HermesProxy
-v4.6.71
+v4.6.78
