@@ -6,7 +6,8 @@
  *
  *   1. The constructor runs before any client code and patches the plaintext data in __TEXT (__const/__cstring):
  *        ConnectTo + GameCrypto RSA modulus, certificate signature modulus, certificate bundle (Arctium data),
- *        ".actual.battle.net" portal suffix, TACT versions URL (Arctium's server, with the client's own build).
+ *        ".actual.battle.net" portal suffix, TACT versions URL (Arctium's server, with the client's own build),
+ *        telemetry host (-> telemetry.invalid, which never resolves).
  *   2. The client's __TEXT,__text is encrypted on disk and decrypts itself during start-up. A background thread waits
  *      for that, suspends the other threads, FINDS the three code sites by pattern (no fixed addresses, so later
  *      builds may work unchanged) and patches them:
@@ -51,7 +52,10 @@ static const uint8_t P_CONNECTTOMODULUS[8] = { 0x91, 0xD5, 0x9B, 0xB7, 0xD4, 0xE
 static const uint8_t P_SIGNATUREMODULUS[8] = { 0x35, 0xFF, 0x17, 0xE7, 0x33, 0xC4, 0xD3, 0xD4 };
 static const uint8_t P_CRYPTORSAMODULUS[8] = { 0x71, 0xFD, 0xFA, 0x60, 0x14, 0x0D, 0xF2, 0x05 };
 static const char S_CERTBUNDLE[] = "{\"Created\":";
-static const char S_PORTAL[] = ".actual.battle.net";                               /* + its NUL */
+static const char S_PORTAL[] = ".actual.battle.net";
+static const char S_TELEMETRY[] = "telemetry-in.battle.net";                       /* + its NUL: the host, or the end of its https URL */
+/* Same length: .invalid is reserved and never resolves, so telemetry goes nowhere */
+static const char S_TELEMETRY_OFF[sizeof S_TELEMETRY] = "telemetry.invalid";                               /* + its NUL */
 static const char S_VERSIONS[] = "http://%s.patch.battle.net:1119/%s/versions";
 /* Arctium's versions server answers for one build: the client's own goes in (5 digits keep the length) */
 #define VERSIONS_NEW_FMT "http://ngdp.arctium.io/%%s/%%s/%s/versions"
@@ -556,6 +560,8 @@ static void classicpatch_init(void) {
         say("[Versions URL] no 5-digit build in %s - optional, continuing", g_clientVersion);
     else if (!data_patch("Versions URL", S_VERSIONS, sizeof S_VERSIONS, versions, sizeof versions, NULL))
         say("[Versions URL] optional - continuing");
+    if (!data_patch("Telemetry", S_TELEMETRY, sizeof S_TELEMETRY, S_TELEMETRY_OFF, sizeof S_TELEMETRY_OFF, NULL))
+        say("[Telemetry] optional - continuing");
     if (!ok || !sig) { say("a data patch failed - code patches skipped, the client will not connect to a custom server"); return; }
     g_sigSlot = (uint64_t)((uintptr_t)sig - g_slide);
 

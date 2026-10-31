@@ -143,7 +143,7 @@ EOF
 override_block abort_launch "$BUILD_TMP/body_abort_launch.sh"
 
 cat > "$BUILD_TMP/body_proxy_already_running.sh" << 'EOF'
-echo "[*] Reusing existing proxy."
+echo "[*] Reusing the running Connection Proxy."
 START_PROXY=false
 EOF
 override_block proxy_already_running "$BUILD_TMP/body_proxy_already_running.sh"
