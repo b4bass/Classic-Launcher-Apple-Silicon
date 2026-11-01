@@ -35,10 +35,17 @@ GAME_WTF_DIR="$BASE_DIR/_classic_era_/WTF"
 GAME_CONFIG="$GAME_WTF_DIR/Config.wtf"
 
 OPENSSL_DIR="$LAUNCHER_DIR/openssl-3.0.7"
-SURGE_BIN="$LAUNCHER_DIR/surge/surge"
-MIRROR_LIST_FILE="$LAUNCHER_DIR/surge/archive_mirrors.txt"
+MIRROR_LIST_FILE="$LAUNCHER_DIR/archive_mirrors.txt"
+# Pieces of a client download, kept until it is installed so a stopped download continues
+DOWNLOAD_DIR="$BASE_DIR/.download"
+DOWNLOAD_PARTS=8
 PROXY_DIR="$LAUNCHER_DIR/proxy"
 PROXY_BIN="$PROXY_DIR/HermesProxy"
+# Addon folders put here are copied into the game's Interface/AddOns at every start
+ADDONS_DIR="$LAUNCHER_DIR/addons"
+# The app reads the launcher folder next to it, not its own copy from when it was built
+[ "$WITHIN_APP" = true ] && [ -d "$BASE_DIR/launcher/addons" ] && ADDONS_DIR="$BASE_DIR/launcher/addons"
+GAME_ADDONS_DIR="$BASE_DIR/_classic_era_/Interface/AddOns"
 
 PATCH_DIR="$LAUNCHER_DIR/build/patch"
 PATCH_DIR_DYLIB="$PATCH_DIR/classicpatch.dylib"
@@ -61,7 +68,7 @@ CLIENTS="
 ask_yes() {
     local answer
     while true; do
-        read -r -p "$1 [Y/n]: " answer
+        read -e -r -p "$1 [Y/n]: " answer
         case "$answer" in
             ""|[Yy]|[Yy][Ee][Ss]) return 0 ;;
             [Nn]|[Nn][Oo]) return 1 ;;
@@ -282,7 +289,8 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --checkpatch           Print PATCHED, UNPATCHED, UNKNOWN, or MISSING, and exit"
             echo "  --patch                Patch the binary only, don't launch"
             echo "  --reset                Clear saved connection config and caches"
-            echo "  --getmissing [url]     Fetch an untouched 1.14 client (prompts for a mirror if no url given)"
+            echo "  --getmissing [url|zip] Fetch an untouched 1.14 client, or install it from a zip on this Mac"
+            echo "                         (prompts for a mirror if neither is given)"
             echo "  --bnet [ip[:port]]     Connect directly, bypassing the Connection Proxy (default ip: 127.0.0.1)"
             echo "  --switchproxy <name>   Use a custom proxy binary from the proxy/ folder"
             echo "  --config <file>        Pass a custom proxy configuration file"
@@ -411,16 +419,115 @@ echo "======================================="
 echo "   Classic 1.14 - Patcher & Launcher  "
 echo "======================================="
 
+# --- Client Download ---
+# file_size FILE: its size in bytes, 0 if it is not there
+file_size() { stat -f %z "$1" 2>/dev/null || echo 0; }
+
+# fetch_part URL FILE FIRST LAST: those bytes of URL into FILE, asking only for what FILE is still missing
+fetch_part() {
+    local url="$1" file="$2" first="$3" last="$4" want have attempt=0
+    want=$((last - first + 1))
+    while [ "$attempt" -lt 30 ]; do
+        have=$(file_size "$file")
+        # More than asked: the server ignored the range - start this piece over
+        if [ "$have" -gt "$want" ]; then : > "$file"; have=0; fi
+        [ "$have" -eq "$want" ] && return 0
+        attempt=$((attempt + 1))
+        # A connection that stalls for a minute is dropped and asked again
+        curl -fsL --connect-timeout 20 --speed-limit 1024 --speed-time 60 \
+            -r "$((first + have))-$last" "$url" >> "$file" 2>/dev/null || sleep 2
+    done
+    [ "$(file_size "$file")" -eq "$want" ]
+}
+
+# Stops the piece downloads (each is a subshell running curl)
+stop_download() {
+    local pid
+    for pid in "${DOWNLOAD_PIDS[@]}"; do
+        pkill -P "$pid" 2>/dev/null
+        kill "$pid" 2>/dev/null
+    done
+    DOWNLOAD_PIDS=()
+}
+
+# download_file URL OUT: in DOWNLOAD_PARTS pieces at once when the server allows it; stopped pieces are continued later
+download_file() {
+    local url="$1" out="$2" size=0 ranges="" part_size i first last have start_have total t0 elapsed rate alive pid failed=0
+    # Size and byte-range support, asked up to 3 times (mirrors answer an error now and then)
+    for i in 1 2 3; do
+        size="$(curl -sIL --connect-timeout 20 --max-time 60 "$url" | tr -d '\r' \
+            | awk 'tolower($1) == "content-length:" { v = $2 } END { print v + 0 }')"
+        [ "$size" -gt 0 ] && ranges="$(curl -sL -r 0-15 --connect-timeout 20 --max-time 60 -o /dev/null -w '%{http_code}' "$url")"
+        [ "$ranges" = 206 ] && break
+        sleep 3
+    done
+    # Pieces of another download (other URL or size) are not mixed in; an unknown size keeps them
+    if [ "$size" -gt 0 ] && [ "$(cat "$out.source" 2>/dev/null)" != "$url $size" ]; then
+        rm -f "$out" "$out".part*
+        echo "$url $size" > "$out.source"
+    fi
+    [ "$size" -gt 0 ] && [ "$(file_size "$out")" -eq "$size" ] && return 0
+
+    # No size or no byte ranges: one connection, which still continues a stopped download
+    if [ "$ranges" != 206 ]; then
+        echo "[*] The mirror does not allow several connections: downloading with one."
+        curl -fL --connect-timeout 20 --retry 5 --retry-delay 3 -C - -o "$out" "$url"
+        return $?
+    fi
+
+    part_size=$(( (size + DOWNLOAD_PARTS - 1) / DOWNLOAD_PARTS ))
+    have=0
+    for ((i = 0; i < DOWNLOAD_PARTS; i++)); do
+        have=$((have + $(file_size "$out.part$i")))
+    done
+    if [ "$have" -gt 0 ]; then
+        echo "[*] Continuing the download: $(awk -v h="$have" -v s="$size" 'BEGIN { printf "%.1f of %.1f GB", h / 1e9, s / 1e9 }') already here."
+    fi
+
+    DOWNLOAD_PIDS=()
+    for ((i = 0; i < DOWNLOAD_PARTS; i++)); do
+        first=$((i * part_size))
+        [ "$first" -ge "$size" ] && break
+        last=$((first + part_size - 1))
+        [ "$last" -ge "$size" ] && last=$((size - 1))
+        fetch_part "$url" "$out.part$i" "$first" "$last" &
+        DOWNLOAD_PIDS+=($!)
+    done
+
+    # Redraw a single status line in place
+    start_have=$have
+    t0=$(date +%s)
+    while :; do
+        alive=0
+        for pid in "${DOWNLOAD_PIDS[@]}"; do kill -0 "$pid" 2>/dev/null && alive=1; done
+        total=0
+        for ((i = 0; i < DOWNLOAD_PARTS; i++)); do total=$((total + $(file_size "$out.part$i"))); done
+        elapsed=$(( $(date +%s) - t0 ))
+        [ "$elapsed" -gt 0 ] && rate=$(( (total - start_have) / elapsed )) || rate=0
+        printf '\r\033[K    %s' "$(awk -v t="$total" -v s="$size" -v r="$rate" \
+            'BEGIN { printf "%.1f / %.1f GB  %d%%  %.1f MB/s", t / 1e9, s / 1e9, t * 100 / s, r / 1e6 }')"
+        [ "$alive" -eq 1 ] || break
+        sleep 2
+    done
+    echo ""
+
+    for pid in "${DOWNLOAD_PIDS[@]}"; do
+        wait "$pid" || failed=1
+    done
+    DOWNLOAD_PIDS=()
+    [ "$failed" -eq 0 ] || return 1
+
+    # Join the pieces: only one piece's worth of extra disk at a time
+    mv -f "$out.part0" "$out" || return 1
+    for ((i = 1; i < DOWNLOAD_PARTS; i++)); do
+        [ -f "$out.part$i" ] || continue
+        cat "$out.part$i" >> "$out" && rm -f "$out.part$i" || return 1
+    done
+    [ "$(file_size "$out")" -eq "$size" ]
+}
+
 # Only used if the client turns out to be missing below
 run_get_client() {
-    if [ ! -f "$SURGE_BIN" ]; then
-        echo "[!] Required surge binary not found at $SURGE_BIN" >&2
-        echo "    Place it there (and chmod +x it), then retry." >&2
-        abort_launch
-    fi
-    strip_quarantine "$LAUNCHER_DIR/surge"
-    chmod +x "$SURGE_BIN" 2>/dev/null
-
     # Normally only reachable via --getmissing on an existing install (CLI only)
     if [ -f "$GAME_BIN" ]; then
         echo "[!] A client already exists at $GAME_BIN" >&2
@@ -429,7 +536,8 @@ run_get_client() {
         abort_launch
     fi
 
-    if pgrep -x "$(basename "$SURGE_BIN")" > /dev/null 2>&1; then
+    # Another launcher already downloading into this game folder
+    if [ -f "$DOWNLOAD_DIR/download.pid" ] && kill -0 "$(cat "$DOWNLOAD_DIR/download.pid" 2>/dev/null)" 2>/dev/null; then
         echo "[!] A download is already in progress - wait for it to finish, then retry." >&2
         abort_launch
     fi
@@ -464,7 +572,7 @@ run_get_client() {
             done
             echo "======================================="
             while true; do
-                read -r -p "Enter choice [1-${#MIRRORS[@]}]: " MIRROR_CHOICE || abort_launch
+                read -e -r -p "Enter choice [1-${#MIRRORS[@]}]: " MIRROR_CHOICE || abort_launch
                 [[ "$MIRROR_CHOICE" =~ ^[0-9]+$ ]] && [ "$MIRROR_CHOICE" -ge 1 ] && [ "$MIRROR_CHOICE" -le "${#MIRRORS[@]}" ] && break
                 echo "[!] Invalid selection." >&2
             done
@@ -472,11 +580,16 @@ run_get_client() {
         fi
     fi
 
+    # A zip already on this Mac is extracted where it is, never moved or deleted
+    LOCAL_ZIP=false
     case "$SELECTED_URL" in
         http://*|https://*) ;;
         *)
-            echo "[!] Mirror URL must start with http:// or https://: $SELECTED_URL" >&2
-            abort_launch
+            if [ ! -f "$SELECTED_URL" ]; then
+                echo "[!] Not a web address (http:// or https://) or a zip on this Mac: $SELECTED_URL" >&2
+                abort_launch
+            fi
+            LOCAL_ZIP=true
             ;;
     esac
 
@@ -484,54 +597,35 @@ run_get_client() {
     ZIP_NAME="$(basename "${SELECTED_URL%%[?#]*}")"
 
     GET_TMP="$(mktemp -d)"
-    trap 'rm -rf "$GET_TMP"' EXIT
+    mkdir -p "$DOWNLOAD_DIR"
+    echo $$ > "$DOWNLOAD_DIR/download.pid"
+    # Stopped or failed: the pieces stay for the next run, the rest goes
+    DOWNLOAD_PIDS=()
+    trap 'stop_download; rm -f "$DOWNLOAD_DIR/download.pid"; rm -rf "$GET_TMP"' EXIT
+    trap 'exit 130' INT TERM
 
-    echo "[*] Fetching client (this may take a while)..."
-    echo "    $SELECTED_URL"
+    if [ "$LOCAL_ZIP" = true ]; then
+        ZIP_PATH="$SELECTED_URL"
+        echo "[*] Using the client archive on this Mac:"
+        echo "    $ZIP_PATH"
+    else
+        echo "[*] Fetching client (this may take a while)..."
+        echo "    $SELECTED_URL"
 
-    # Snapshot existing transfer IDs to spot the new one later
-    BEFORE_IDS="$("$SURGE_BIN" ls 2>/dev/null | tail -n +3 | awk '{print $1}')"
-
-    # Run headless in the background, silence its own status chatter
-    "$SURGE_BIN" server "$SELECTED_URL" --output "$GET_TMP" --exit-when-done >/dev/null 2>&1 &
-    SURGE_PID=$!
-
-    # Find our transfer's ID among any new entries
-    sleep 2
-    DL_ID=""
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        DL_ID="$("$SURGE_BIN" ls 2>/dev/null | tail -n +3 | awk '{print $1}' \
-            | grep -vFx -f <(printf '%s\n' "$BEFORE_IDS") | head -1)"
-        [ -n "$DL_ID" ] && break
-        sleep 1
-    done
-
-    # Redraw a single status line in place, no table, no clearing
-    while kill -0 "$SURGE_PID" 2>/dev/null; do
-        if [ -n "$DL_ID" ]; then
-            LINE="$("$SURGE_BIN" ls 2>/dev/null | awk -v id="$DL_ID" '$1 == id')"
-            [ -n "$LINE" ] && printf '\r\033[K%s' "$LINE"
+        ZIP_PATH="$DOWNLOAD_DIR/$ZIP_NAME"
+        if ! download_file "$SELECTED_URL" "$ZIP_PATH"; then
+            echo "[!] Fetching the client failed." >&2
+            echo "    (check the mirror - it may be dead: $SELECTED_URL)" >&2
+            echo "    Run again to continue the download." >&2
+            abort_launch
         fi
-        sleep 2
-    done
-    echo ""
-
-    wait "$SURGE_PID"
-    if [ $? -ne 0 ]; then
-        echo "[!] Fetching the client failed." >&2
-        abort_launch
-    fi
-
-    ZIP_PATH="$GET_TMP/$ZIP_NAME"
-    if [ ! -f "$ZIP_PATH" ]; then
-        echo "[!] Expected file not found at $ZIP_PATH" >&2
-        echo "    (check the mirror - it may be dead: $SELECTED_URL)" >&2
-        abort_launch
     fi
 
     echo "[*] Extracting client archive..."
     mkdir -p "$GET_TMP/extracted"
     if ! ditto -xk "$ZIP_PATH" "$GET_TMP/extracted"; then
+        # A broken download is not kept: the next run fetches it again
+        [ "$LOCAL_ZIP" = true ] || rm -f "$ZIP_PATH"
         echo "[!] Failed to extract $ZIP_PATH" >&2
         abort_launch
     fi
@@ -557,8 +651,8 @@ run_get_client() {
     fi
 
     echo "[*] Client fetched and installed."
-    rm -rf "$GET_TMP"
-    trap - EXIT
+    rm -rf "$GET_TMP" "$DOWNLOAD_DIR"
+    trap - EXIT INT TERM
     # Fall through into the patch-and-launch flow below instead of exiting
 }
 
@@ -642,8 +736,8 @@ if [ "$RESET" = true ]; then
     rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
     set_portal "127.0.0.1"
     # Manual escape hatch - everything below is normally only touched on first use
-    strip_quarantine "$GAME_BIN" "$LAUNCHER_DIR/surge" "$PROXY_DIR" "$OPENSSL_DIR"
-    chmod +x "$GAME_BIN" "$SURGE_BIN" "$PROXY_BIN" 2>/dev/null
+    strip_quarantine "$GAME_BIN" "$PROXY_DIR" "$OPENSSL_DIR"
+    chmod +x "$GAME_BIN" "$PROXY_BIN" 2>/dev/null
 fi
 
 # --patch stops here - --reset carries on into the connection setup below
@@ -711,12 +805,12 @@ else
         # Enter = 127.0.0.1, a wrong address asks again
         while true; do
             if [ "$CONNECTION_TYPE" = "PROXY" ]; then
-                read -r -p "Enter realmlist server address [127.0.0.1]: " INPUT_IP
+                read -e -r -p "Enter realmlist server address [127.0.0.1]: " INPUT_IP
                 SAVED_IP=${INPUT_IP:-127.0.0.1}
                 validate_server_address "$SAVED_IP" && break
                 echo "[!] '$SAVED_IP' is not a valid IP or hostname." >&2
             else
-                read -r -p "Enter native bnetserver [127.0.0.1]: " INPUT_IP
+                read -e -r -p "Enter native bnetserver [127.0.0.1]: " INPUT_IP
                 SAVED_IP=${INPUT_IP:-127.0.0.1}
                 validate_bnet_address "$SAVED_IP" && break
                 echo "[!] '$SAVED_IP' is not a valid IP, hostname, or host:port." >&2
@@ -790,7 +884,23 @@ elif [ "$CONNECTION_TYPE" = "DIRECT" ]; then
     set_portal "$SAVED_IP"
 fi
 
+# Copies each addon folder of launcher/addons into the game, replacing an older copy of the same addon
+install_addons() {
+    local addon count=0
+    [ -d "$ADDONS_DIR" ] || return 0
+    for addon in "$ADDONS_DIR"/*/; do
+        [ -d "$addon" ] || continue
+        addon="${addon%/}"
+        mkdir -p "$GAME_ADDONS_DIR"
+        rm -rf "${GAME_ADDONS_DIR:?}/$(basename "$addon")"
+        ditto "$addon" "$GAME_ADDONS_DIR/$(basename "$addon")" && count=$((count + 1))
+    done
+    [ "$count" -gt 0 ] && echo "[*] Installed $count addon(s) from the launcher's addons folder."
+    return 0
+}
+
 # 4. Execution Phase
+install_addons
 # Job control on, so the game gets its own process group, away from Ctrl+C
 set -m
 

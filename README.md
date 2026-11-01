@@ -75,6 +75,12 @@ To fetch missing files.
 launch.sh --getmissing
 ```
 
+To install the client from a zip already on your Mac (it stays where it is).
+
+```bash
+launch.sh --getmissing ~/Downloads/WoW_Classic_1.14.0.40618_macOS.zip
+```
+
 To use a game folder somewhere else.
 
 ```bash

@@ -11,3 +11,4 @@ launcher/proxy/appsettings.Development.json
 launcher/proxy/AccountData/
 launcher/proxy/Logs/
 launcher/proxy/PacketsLog/
+.download/
