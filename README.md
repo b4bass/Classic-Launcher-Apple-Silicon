@@ -6,11 +6,6 @@ Patches and launches the modern macOS build of Classic 1.14 for Apple Silicon an
 
 Extract the contents of the ZIP downloaded from this repository directly into your game directory.
 
-```bash
-tar xf Classic-Launcher-Apple-Silicon-main.zip --strip-components=1
-chmod +x launcher/launch.sh
-```
-
 Your directory should look like this:
 
 ```text
@@ -75,12 +70,6 @@ To fetch missing files.
 launch.sh --getmissing
 ```
 
-To install the client from a zip already on your Mac (it stays where it is).
-
-```bash
-launch.sh --getmissing ~/Downloads/WoW_Classic_1.14.0.40618_macOS.zip
-```
-
 To use a game folder somewhere else.
 
 ```bash
@@ -106,13 +95,13 @@ launch.sh --switchproxy MyProxy
 To pass dynamic override arguments to HermesProxy (e.g., overriding the server address).
 
 ```bash
-launch.sh --set ServerAddress=logon.example.com
+launch.sh --set ServerAddress=logon.yourserver.com
 ```
 
 You can also chain arguments together:
 
 ```bash
-launch.sh --switchproxy MyProxy --set ServerAddress=127.0.0.1 --set LogLevel=Debug
+launch.sh --switchproxy MyProxy --set ServerAddress=logon.yourserver.com --set LogLevel=Debug
 ```
 
 To specify a custom proxy configuration file.
@@ -132,7 +121,6 @@ launch.sh --bnet 127.0.0.1
 ### Classic Era Launcher.app Compilation (Optional)
 
 ```bash
-chmod +x launcher/build/build_launcher.sh
 ./launcher/build/build_launcher.sh
 ```
 
@@ -152,7 +140,6 @@ The library can be built from `classicpatch.c` for both Apple Silicon and Intel 
 
 ```bash
 xcode-select --install
-chmod +x launcher/build/patch/build_classicpatch.sh
 ./launcher/build/patch/build_classicpatch.sh
 ```
 
