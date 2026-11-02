@@ -10,6 +10,7 @@ PROXY_ARGS_PASSED=false
 SAVED_USE_PROXY=false
 LAUNCH_PROXY=false
 CHECK_PATCH=false
+NO_ADDONS=false
 
 # --- Path Definitions ---
 LAUNCHER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +19,23 @@ if [[ "$LAUNCHER_DIR" == *".app/Contents/Resources" ]]; then
     WITHIN_APP=true
 else
     BASE_DIR="$(dirname "$LAUNCHER_DIR")"
+fi
+# options.txt: options as typed after launch.sh, any number per line. The command line comes after it, so it wins
+OPTIONS_FILE="$LAUNCHER_DIR/options.txt"
+[ "$WITHIN_APP" = true ] && [ -f "$BASE_DIR/launcher/options.txt" ] && OPTIONS_FILE="$BASE_DIR/launcher/options.txt"
+declare -a FILE_ARGS
+if [ -f "$OPTIONS_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="$(echo "$line" | tr -d '\r')"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        # Split like Terminal does: a path with spaces goes in quotes
+        if ! words="$(printf '%s\n' "$line" | xargs -n1 printf '%s\n' 2>/dev/null)"; then
+            echo "[!] ${OPTIONS_FILE##*/}: a quote is not closed in: $line" >&2
+            exit 1
+        fi
+        while IFS= read -r word; do FILE_ARGS+=("$word"); done <<< "$words"
+    done < "$OPTIONS_FILE"
+    set -- "${FILE_ARGS[@]}" "$@"
 fi
 # --game <dir> overrides the game folder
 for ((i = 1; i < $#; i++)); do
@@ -34,7 +52,7 @@ GAME_BAK="${GAME_BIN}_bak"
 GAME_WTF_DIR="$BASE_DIR/_classic_era_/WTF"
 GAME_CONFIG="$GAME_WTF_DIR/Config.wtf"
 
-OPENSSL_DIR="$LAUNCHER_DIR/openssl-3.0.7"
+OPENSSL_DIR="$LAUNCHER_DIR/openssl"
 MIRROR_LIST_FILE="$LAUNCHER_DIR/archive_mirrors.txt"
 # Pieces of a client download, kept until it is installed so a stopped download continues
 DOWNLOAD_DIR="$BASE_DIR/.download"
@@ -292,14 +310,21 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --getmissing [url|zip] Fetch an untouched 1.14 client, or install it from a zip on this Mac"
             echo "                         (prompts for a mirror if neither is given)"
             echo "  --bnet [ip[:port]]     Connect directly, bypassing the Connection Proxy (default ip: 127.0.0.1)"
-            echo "  --switchproxy <name>   Use a custom proxy binary from the proxy/ folder"
+            echo "  --switchproxy <name>   Use another proxy binary: its name in the proxy/ folder, or its path"
             echo "  --config <file>        Pass a custom proxy configuration file"
             echo "  --set <key=value>      Pass a proxy override, repeatable"
+            echo "  --noaddon              Don't copy the addons folder into the game"
             echo "  --help, -h             Show this help"
+            echo ""
+            echo "Options in launcher/options.txt are read first, at every start."
             exit 0
             ;;
         --checkpatch)
             CHECK_PATCH=true
+            shift
+            ;;
+        --noaddon)
+            NO_ADDONS=true
             shift
             ;;
         --game)
@@ -418,10 +443,17 @@ abort_launch() {
 echo "======================================="
 echo "   Classic 1.14 - Patcher & Launcher  "
 echo "======================================="
+[ ${#FILE_ARGS[@]} -gt 0 ] && echo "[*] Options from ${OPTIONS_FILE#"$BASE_DIR/"}: ${FILE_ARGS[*]}"
 
 # --- Client Download ---
 # file_size FILE: its size in bytes, 0 if it is not there
 file_size() { stat -f %z "$1" 2>/dev/null || echo 0; }
+
+# Free bytes on the game folder's disk
+free_bytes() { df -k "$BASE_DIR" | awk 'NR == 2 { print $4 * 1024 }'; }
+
+# gb BYTES: e.g. 6.8 GB
+gb() { awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
 
 # fetch_part URL FILE FIRST LAST: those bytes of URL into FILE, asking only for what FILE is still missing
 fetch_part() {
@@ -596,7 +628,27 @@ run_get_client() {
     # Strip any query string/fragment before using it as a filename
     ZIP_NAME="$(basename "${SELECTED_URL%%[?#]*}")"
 
-    GET_TMP="$(mktemp -d)"
+    # Room for what is left to download plus the unpacked client (moved into place, not copied)
+    if [ "$LOCAL_ZIP" = true ]; then
+        ZIP_SIZE=$(file_size "$SELECTED_URL"); ZIP_HAVE=$ZIP_SIZE
+    else
+        ZIP_SIZE="$(curl -sIL --connect-timeout 20 --max-time 60 "$SELECTED_URL" | tr -d '\r' \
+            | awk 'tolower($1) == "content-length:" { v = $2 } END { print v + 0 }')"
+        ZIP_HAVE=$(file_size "$DOWNLOAD_DIR/$ZIP_NAME")
+        for part in "$DOWNLOAD_DIR/$ZIP_NAME".part*; do [ -f "$part" ] && ZIP_HAVE=$((ZIP_HAVE + $(file_size "$part"))); done
+    fi
+    if [ "$ZIP_SIZE" -gt 0 ]; then
+        NEED=$((ZIP_SIZE - ZIP_HAVE + ZIP_SIZE * 11 / 10))
+        FREE=$(free_bytes)
+        if [ "$NEED" -gt "$FREE" ]; then
+            echo "[!] Not enough free space: the client needs about $(gb "$NEED") here (download and unpacked), $(gb "$FREE") is free." >&2
+            echo "    Free some space, then run again." >&2
+            abort_launch
+        fi
+    fi
+
+    # Unpacked next to its destination, so installing it is a move
+    GET_TMP="$(mktemp -d "$BASE_DIR/.extract.XXXXXX")"
     mkdir -p "$DOWNLOAD_DIR"
     echo $$ > "$DOWNLOAD_DIR/download.pid"
     # Stopped or failed: the pieces stay for the next run, the rest goes
@@ -645,10 +697,16 @@ run_get_client() {
     fi
 
     echo "[*] Installing client into $BASE_DIR..."
-    if ! ditto "$EXTRACTED_ROOT" "$BASE_DIR"; then
-        echo "[!] Failed to install the client into $BASE_DIR" >&2
-        abort_launch
-    fi
+    for entry in "$EXTRACTED_ROOT"/* "$EXTRACTED_ROOT"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        name="$(basename "$entry")"
+        # Moved when new; merged into what the folder already has otherwise
+        if [ -e "$BASE_DIR/$name" ]; then
+            ditto "$entry" "$BASE_DIR/$name"
+        else
+            mv "$entry" "$BASE_DIR/$name"
+        fi || { echo "[!] Failed to install the client into $BASE_DIR" >&2; abort_launch; }
+    done
 
     echo "[*] Client fetched and installed."
     rm -rf "$GET_TMP" "$DOWNLOAD_DIR"
@@ -831,10 +889,14 @@ if [ "$CONNECTION_TYPE" = "PROXY" ]; then
     echo "[*] Configuring the game to connect to the Connection Proxy (127.0.0.1)..."
     set_portal "127.0.0.1"
 
-    # Determine Proxy Binary
+    # Determine Proxy Binary: a name in the proxy folder, or a path to one elsewhere
     if [ -n "$CUSTOM_PROXY_BIN" ]; then
-        if [ -f "$PROXY_DIR/$CUSTOM_PROXY_BIN" ]; then
-            PROXY_BIN="$PROXY_DIR/$CUSTOM_PROXY_BIN"
+        case "$CUSTOM_PROXY_BIN" in
+            */*) CUSTOM_PROXY_PATH="$CUSTOM_PROXY_BIN" ;;
+            *) CUSTOM_PROXY_PATH="$PROXY_DIR/$CUSTOM_PROXY_BIN" ;;
+        esac
+        if [ -f "$CUSTOM_PROXY_PATH" ]; then
+            PROXY_BIN="$(cd "$(dirname "$CUSTOM_PROXY_PATH")" && pwd)/$(basename "$CUSTOM_PROXY_PATH")"
         else
             echo "[!] Custom proxy '$CUSTOM_PROXY_BIN' not found. Using default." >&2
         fi
@@ -900,23 +962,59 @@ install_addons() {
 }
 
 # 4. Execution Phase
-install_addons
+[ "$NO_ADDONS" = true ] || install_addons
 # Job control on, so the game gets its own process group, away from Ctrl+C
 set -m
 
 START_PROXY=true
-PROXY_PROC_NAME=$(basename "$PROXY_BIN")
 
-# CLI default prompts interactively - the built .app reuses silently
+# proxy_setting KEY ARGS...: the value of the last --set KEY=... in a proxy command
+proxy_setting() {
+    local key="$1" value="" arg
+    shift
+    for arg in "$@"; do
+        [[ "$arg" == "$key="* ]] && value="${arg#*=}"
+    done
+    echo "$value"
+}
+
+# proxy_target ARGS...: the client and server a proxy command is for, e.g. 1.14.2 (42597) on logon.yourserver.com
+proxy_target() {
+    local build server version
+    build="$(proxy_setting ClientBuild "$@")"
+    server="$(proxy_setting ServerAddress "$@")"
+    version="$(awk -v b="$build" '$2 == b { print $1 }' <<< "$CLIENTS")"
+    echo "${version:-client} (${build:-unknown build}) on ${server:-an unknown server}"
+}
+
+# Stops the running proxy (RUNNING_PID) and waits up to 5 s for its port to be free
+stop_running_proxy() {
+    local i
+    kill "$RUNNING_PID" 2>/dev/null
+    for ((i = 0; i < 10; i++)); do
+        lsof -nP -t -iTCP:"$PROXY_PORT" -sTCP:LISTEN > /dev/null 2>&1 || return 0
+        sleep 0.5
+    done
+}
+
+# CLI default asks, restart first when the running one is for another client or server - the built .app decides alone
 proxy_already_running() {
     # WITHIN_APP:proxy_already_running:start
-    if ask_yes "The Connection Proxy is already running. Keep it running?"; then
-        echo "[*] Keeping the Connection Proxy running."
-        START_PROXY=false
+    if [ "$PROXY_MATCHES" = true ]; then
+        if ask_yes "The Connection Proxy is already running for $RUNNING_TARGET. Keep it running?"; then
+            echo "[*] Keeping the Connection Proxy running."
+            START_PROXY=false
+            return
+        fi
     else
-        killall "$PROXY_PROC_NAME" 2>/dev/null
-        sleep 1
+        echo "[!] The Connection Proxy already running is for $RUNNING_TARGET; this game needs $WANTED_TARGET."
+        if ! ask_yes "Restart it for this game?"; then
+            echo "[*] Keeping the Connection Proxy running."
+            START_PROXY=false
+            return
+        fi
     fi
+    stop_running_proxy
     # WITHIN_APP:proxy_already_running:end
 }
 
@@ -937,13 +1035,28 @@ after_game_launched() {
     # WITHIN_APP:after_game_launched:end
 }
 
-if [ "$LAUNCH_PROXY" = true ] && pgrep -x "$PROXY_PROC_NAME" > /dev/null 2>&1; then
-    proxy_already_running
+# A running proxy is found by its BNet port, whatever its name: macOS lets a second one listen on the same port,
+# and the game would reach either
+PROXY_PORT="$(proxy_setting BNetPort "${PROXY_COMMAND[@]}")"
+PROXY_PORT="${PROXY_PORT:-1119}"
+RUNNING_PID="$(lsof -nP -t -iTCP:"$PROXY_PORT" -sTCP:LISTEN 2>/dev/null | head -1)"
+if [ "$LAUNCH_PROXY" = true ] && [ -n "$RUNNING_PID" ]; then
+    RUNNING_BIN="$(ps -o comm= -p "$RUNNING_PID")"
+    # Its command line tells which client and server it was started for; one started by this launcher has a ClientBuild
+    read -r -a RUNNING_ARGS <<< "$(ps -o args= -p "$RUNNING_PID")"
+    if [ -n "$(proxy_setting ClientBuild "${RUNNING_ARGS[@]}")" ]; then
+        RUNNING_TARGET="$(proxy_target "${RUNNING_ARGS[@]}") with ${RUNNING_BIN##*/}"
+        WANTED_TARGET="$(proxy_target "${PROXY_COMMAND[@]}") with ${PROXY_BIN##*/}"
+        [ "$RUNNING_BIN" = "$PROXY_BIN" ] && [ "$RUNNING_TARGET" = "$WANTED_TARGET" ] && PROXY_MATCHES=true || PROXY_MATCHES=false
+        proxy_already_running
+    else
+        echo "[!] Port $PROXY_PORT is already used by ${RUNNING_BIN##*/} (PID $RUNNING_PID): the game may reach it instead of the Connection Proxy." >&2
+    fi
 fi
 
 if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
     FULL_PROXY_CMD=("${PROXY_COMMAND[@]}")
-    strip_quarantine "$PROXY_DIR" "$OPENSSL_DIR"
+    strip_quarantine "$PROXY_DIR" "$PROXY_BIN" "$OPENSSL_DIR"
     chmod +x "$PROXY_BIN" 2>/dev/null
 
     echo "[*] Executing Connection Proxy command: ${FULL_PROXY_CMD[*]}"
@@ -954,7 +1067,8 @@ if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
         echo "[*] Launching the game..."
         echo "======================================="
 
-        nohup "$GAME_BIN" > /dev/null 2>&1 &
+        # Started from the game folder; exec keeps one PID to watch
+        (cd "$BASE_DIR" && exec nohup "$GAME_BIN" > /dev/null 2>&1) &
         GAME_PID=$!
 
         while kill -0 "$GAME_PID" 2>/dev/null; do
@@ -974,16 +1088,19 @@ if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
     ) &
     disown
 
-    cd "$PROXY_DIR"
+    # A proxy elsewhere runs from its own folder, with its own appsettings.json
+    cd "$(dirname "$PROXY_BIN")"
+    # OpenSSL for proxies on .NET 6/7 (AES-GCM; they quit at start without it). HermesProxy 4.x on .NET 10 does not use it
     export DYLD_LIBRARY_PATH="$OPENSSL_DIR"
     # exec replaces this process with the proxy, so Ctrl+C reaches it directly
-    # Stdin from /dev/null - "Press enter to close" won't hang with no tty to read
+    # Stdin from /dev/null: HermesProxy before v4.7 waited for Enter when it quit
     exec "${FULL_PROXY_CMD[@]}" < /dev/null
 else
     echo "[*] Launching the game..."
     echo "======================================="
 
-    nohup "$GAME_BIN" > /dev/null 2>&1 &
+    # Started from the game folder; exec keeps one PID to watch
+    (cd "$BASE_DIR" && exec nohup "$GAME_BIN" > /dev/null 2>&1) &
 
     after_game_launched
 fi

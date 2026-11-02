@@ -1,0 +1,5 @@
+# Options read at every start, as typed after launch.sh (launch.sh --help lists them), any number per line.
+# Options typed on the command line come after these, so they win. Remove the # to use a line.
+#
+# --set ServerAddress=logon.yourserver.com --set Log.MinimumLevel=Debug
+# --noaddon

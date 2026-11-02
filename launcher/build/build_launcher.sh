@@ -30,7 +30,7 @@ for f in "${PATCH_FILES[@]}"; do
 done
 [ -f "$LAUNCHER_DIR/launch.sh" ] || { echo "[!] launch.sh not found at $LAUNCHER_DIR/launch.sh" >&2; exit 1; }
 [ -f "$LAUNCHER_DIR/proxy/HermesProxy" ] || { echo "[!] HermesProxy binary not found at $LAUNCHER_DIR/proxy/HermesProxy" >&2; exit 1; }
-[ -d "$LAUNCHER_DIR/openssl-3.0.7" ] || { echo "[!] openssl-3.0.7 folder not found at $LAUNCHER_DIR/openssl-3.0.7" >&2; exit 1; }
+[ -f "$LAUNCHER_DIR/openssl/libssl.3.dylib" ] || { echo "[!] OpenSSL not found at $LAUNCHER_DIR/openssl" >&2; exit 1; }
 
 # 1. Create .icns from .png (Required for high-quality bundle icons)
 echo "[*] Creating icon from wow.png..."
@@ -142,8 +142,13 @@ EOF
 override_block abort_launch "$BUILD_TMP/body_abort_launch.sh"
 
 cat > "$BUILD_TMP/body_proxy_already_running.sh" << 'EOF'
-echo "[*] Reusing the running Connection Proxy."
-START_PROXY=false
+if [ "$PROXY_MATCHES" = true ]; then
+    echo "[*] Reusing the running Connection Proxy."
+    START_PROXY=false
+else
+    echo "[*] Restarting the Connection Proxy: it was running for $RUNNING_TARGET."
+    stop_running_proxy
+fi
 EOF
 override_block proxy_already_running "$BUILD_TMP/body_proxy_already_running.sh"
 

@@ -76,6 +76,12 @@ To use a game folder somewhere else.
 launch.sh --game /path/to/Game
 ```
 
+To start without copying the `addons` folder into the game.
+
+```bash
+launch.sh --noaddon
+```
+
 To list all available options.
 
 ```bash
@@ -86,7 +92,7 @@ launch.sh --help
 
 ### Proxy Options
 
-To use a custom proxy executable located in the `proxy` folder instead of the default.
+To use another proxy executable instead of the default: its name in the `proxy` folder, or its path.
 
 ```bash
 launch.sh --switchproxy MyProxy
@@ -101,7 +107,7 @@ launch.sh --set ServerAddress=logon.yourserver.com
 You can also chain arguments together:
 
 ```bash
-launch.sh --switchproxy MyProxy --set ServerAddress=logon.yourserver.com --set LogLevel=Debug
+launch.sh --switchproxy MyProxy --set ServerAddress=logon.yourserver.com --set Log.MinimumLevel=Debug
 ```
 
 To specify a custom proxy configuration file.
