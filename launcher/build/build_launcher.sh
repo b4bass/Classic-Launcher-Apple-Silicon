@@ -3,7 +3,45 @@
 BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # launcher/build/
 LAUNCHER_DIR="$(dirname "$BUILD_DIR")"                     # launcher/
 BASE_DIR="$(dirname "$LAUNCHER_DIR")"                      # game folder
-APP_NAME="Classic Era Launcher"
+
+# build_launcher.sh [era|tbc|wotlk|cata]: an app that starts that client. Without one: an app for each client in the
+# game folder. Classic Era lives in _classic_era_; TBC, WotLK or Cataclysm Classic in _classic_
+GAME_APP_ERA="$BASE_DIR/_classic_era_/World of Warcraft Classic.app"
+GAME_APP_CLASSIC="$BASE_DIR/_classic_/World of Warcraft Classic.app"
+CLASSIC_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$GAME_APP_CLASSIC/Contents/Info.plist" 2>/dev/null)"
+case "$CLASSIC_VERSION" in 3.*) CLASSIC_CLIENT=wotlk ;; 4.*) CLASSIC_CLIENT=cata ;; *) CLASSIC_CLIENT=tbc ;; esac
+
+if [ $# -eq 0 ]; then
+    BUILT=false
+    MARK="$(mktemp)"
+    [ -d "$GAME_APP_ERA" ] && { /bin/bash "${BASH_SOURCE[0]}" era || { rm -f "$MARK"; exit 1; }; BUILT=true; }
+    [ -d "$GAME_APP_CLASSIC" ] && { /bin/bash "${BASH_SOURCE[0]}" "$CLASSIC_CLIENT" || { rm -f "$MARK"; exit 1; }; BUILT=true; }
+    if [ "$BUILT" = false ]; then
+        rm -f "$MARK"
+        echo "[!] No client in $BASE_DIR (_classic_era_ or _classic_): put one there, then build the app." >&2
+        exit 1
+    fi
+    # An app not made now is for a client this folder no longer holds
+    find "$BASE_DIR" -maxdepth 1 -name '*Launcher.app' ! -newer "$MARK" | while IFS= read -r old; do
+        echo "[!] ${old##*/} is not for a client in this folder anymore: you can delete it."
+    done
+    rm -f "$MARK"
+    exit 0
+fi
+
+case "$1" in
+    era)
+        [ -d "$GAME_APP_ERA" ] || { echo "[!] No Classic Era client in $BASE_DIR/_classic_era_" >&2; exit 1; }
+        APP_NAME="Classic Era Launcher"
+        ;;
+    tbc|wotlk|cata)
+        [ -d "$GAME_APP_CLASSIC" ] || { echo "[!] No client in $BASE_DIR/_classic_" >&2; exit 1; }
+        [ "$1" = "$CLASSIC_CLIENT" ] || { echo "[!] _classic_ folder holds $CLASSIC_VERSION, not $1." >&2; exit 1; }
+        case "$1" in tbc) APP_NAME="TBC Classic Launcher" ;; wotlk) APP_NAME="WotLK Classic Launcher" ;; cata) APP_NAME="Cataclysm Classic Launcher" ;; esac
+        ;;
+    *) echo "[!] Usage: build_launcher.sh [era|tbc|wotlk|cata]" >&2; exit 1 ;;
+esac
+CLIENT_ARGS=" --client $1"
 APP_OUT="$BASE_DIR/$APP_NAME.app"
 ICON_PNG="$BUILD_DIR/wow.png"
 PATCH_DIR="$BUILD_DIR/patch"                               # launcher/build/patch/
@@ -50,9 +88,10 @@ set launchScript to POSIX path of (path to resource "launch.sh")
 
 tell application "Terminal"
     activate
-    do script "bash " & quoted form of launchScript
+    do script "bash " & quoted form of launchScript & "CLIENT_ARGS"
 end tell
 EOF
+sed -i '' "s/CLIENT_ARGS/$CLIENT_ARGS/" "$BUILD_TMP/launcher.applescript"
 
 # 3. Compile into .app
 echo "[*] Building $APP_NAME.app..."

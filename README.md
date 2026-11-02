@@ -1,6 +1,6 @@
 # Classic-Launcher-Apple-Silicon
 
-Patches and launches the modern macOS build of Classic 1.14 for Apple Silicon and Intel, enabling connections to legacy Vanilla 1.12 realms.
+Patches and launches the modern macOS builds of Classic Era 1.14, TBC Classic 2.5, WotLK Classic 3.4.3 and Cataclysm Classic 4.4.2 for Apple Silicon and Intel, enabling connections to legacy realms (1.12, 2.4.3, 3.3.5a, 4.3.4).
 
 <br />
 
@@ -11,8 +11,9 @@ Your directory should look like this:
 ```text
 Game/
 ├── Data/
-├── _classic_era_/
-└── launcher/      ← from this repo
+├── _classic_era_/  ← Classic Era
+├── _classic_/      ← TBC, WotLK or Cataclysm Classic
+└── launcher/       ← from this repo
 ```
 
 Manually execute the launch script.
@@ -21,7 +22,7 @@ Manually execute the launch script.
 ./launcher/launch.sh
 ```
 
-When prompted, type `yes` to use HermesProxy so you can connect to legacy 1.12 servers (MaNGOS).
+When prompted, type `yes` to use HermesProxy so you can connect to legacy servers (MaNGOS, TrinityCore, AzerothCore).
 
 The launcher copies `classicpatch.dylib` to the game app and modifies the binary once to load the library at start time.<br />
 At each startup, the library patches the client in memory, modifying the server keys, certificate checks, and login portal.
@@ -31,6 +32,11 @@ It expects the unpatched sha1 checksum:
 - 1.14.0 (40618): `200c4c54316fb801d6d4d07d7031bb2b43f1c2be`
 - 1.14.1 (42032): `bff00e04f1a02ecf4b8410d5796eddda1dc24afc`
 - 1.14.2 (42597): `638233fd384602862e41590e4b0213242c82257f`
+- 2.5.2 (40892): `be5eee620d5a75e4142a60858c013a861625b62e`
+- 2.5.3 (42328): `fc843a8d2f9a0ba0e2f86c0ad9e23b03de1ef99d`
+- 2.5.3 (42598): `be3a5cb20630b0f420b5531238933f6f3fb8f09a`
+- 3.4.3 (54261): `1d7cee2116baf1c4247e67a4b5f3c760dd5df7e6`
+- 4.4.2 (60895): `e4b089c80ceb293931ad97e0b2f90b0b7c2de108`
 
 <br />
 
@@ -118,7 +124,9 @@ launch.sh --bnet 127.0.0.1
 
 <br />
 
-### Classic Era Launcher.app Compilation (Optional)
+### Launcher App Compilation (Optional)
+
+Builds one app per client in the game folder: `Classic Era Launcher.app`, `TBC Classic Launcher.app`, `WotLK Classic Launcher.app` or `Cataclysm Classic Launcher.app`.
 
 ```bash
 ./launcher/build/build_launcher.sh
@@ -126,9 +134,9 @@ launch.sh --bnet 127.0.0.1
 
 ### Resetting the Compiled App
 
-Once you've built `Classic Era Launcher.app`, the only way to change the server you connect to (realmlist) is to reset its configuration.
+Once you've built a launcher app, the only way to change the server you connect to (realmlist) is to reset its configuration.
 
-1. Open your game folder in Finder — the one holding `Classic Era Launcher.app` and `_classic_era_`.
+1. Open your game folder in Finder — the one holding the app.
 2. Delete the `connect.conf` file.
 3. Relaunch the app — you'll be prompted to set up the realm connection again.
 
@@ -148,5 +156,5 @@ xcode-select --install
 <br />
 <br />
 
-Credits:  [0Blu](https://github.com/0Blu)   [Arctium](https://github.com/Arctium)   [Xian55](https://github.com/Xian55/HermesProxy)   [Jhinzuo2](https://github.com/jhinzuo2/wow-classic-arm64-customservers)
+Credits:  [0Blu](https://github.com/0Blu)   [Arctium](https://github.com/Arctium)   [WowLegacyCore](https://github.com/WowLegacyCore/HermesProxy)   [Xian55](https://github.com/Xian55/HermesProxy)   [Jhinzuo2](https://github.com/jhinzuo2/wow-classic-arm64-customservers)
 <br />

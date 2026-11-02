@@ -37,23 +37,18 @@ if [ -f "$OPTIONS_FILE" ]; then
     done < "$OPTIONS_FILE"
     set -- "${FILE_ARGS[@]}" "$@"
 fi
-# --game <dir> overrides the game folder
+# --game <dir> overrides the game folder, --client era|tbc|wotlk|cata the client in it
+CLIENT_ARG=""
 for ((i = 1; i < $#; i++)); do
+    j=$((i + 1))
     if [ "${!i}" = "--game" ]; then
-        GAME_ARG=$((i + 1))
-        BASE_DIR="$(cd "${!GAME_ARG}" 2>/dev/null && pwd)"
+        BASE_DIR="$(cd "${!j}" 2>/dev/null && pwd)"
+    elif [ "${!i}" = "--client" ]; then
+        CLIENT_ARG="${!j}"
     fi
 done
 
 USER_CONF="$BASE_DIR/connect.conf"
-# The client: its section of connect.conf and its addons folder (era, tbc, wotlk, cata)
-CLIENT="era"
-CLIENT_NAME="Classic Era"
-GAME_APP="$BASE_DIR/_classic_era_/World of Warcraft Classic.app"
-GAME_BIN="$GAME_APP/Contents/MacOS/World of Warcraft Classic"
-GAME_BAK="${GAME_BIN}_bak"
-GAME_WTF_DIR="$BASE_DIR/_classic_era_/WTF"
-GAME_CONFIG="$GAME_WTF_DIR/Config.wtf"
 
 OPENSSL_DIR="$LAUNCHER_DIR/openssl"
 MIRROR_LIST_FILE="$LAUNCHER_DIR/archive_mirrors.txt"
@@ -69,7 +64,6 @@ PROXY_BIN="$PROXY_DIR/HermesProxy"
 ADDONS_DIR="$LAUNCHER_DIR/addons"
 # The app reads the launcher folder next to it, not its own copy from when it was built
 [ "$WITHIN_APP" = true ] && [ -d "$BASE_DIR/launcher/addons" ] && ADDONS_DIR="$BASE_DIR/launcher/addons"
-GAME_ADDONS_DIR="$BASE_DIR/_classic_era_/Interface/AddOns"
 
 PATCH_DIR="$LAUNCHER_DIR/build/patch"
 PATCH_DIR_DYLIB="$PATCH_DIR/classicpatch.dylib"
@@ -77,7 +71,6 @@ PATCH_SCRIPT="$PATCH_DIR/patch_binary.sh"
 
 # Relative to the game app's Contents folder
 CLASSICPATCH_SUBPATH="Frameworks/classicpatch.dylib"
-CLASSICPATCH_DYLIB="$GAME_APP/Contents/$CLASSICPATCH_SUBPATH"
 
 
 # --- Supported Clients ---
@@ -86,6 +79,11 @@ CLIENTS="
 1.14.0 40618 200c4c54316fb801d6d4d07d7031bb2b43f1c2be
 1.14.1 42032 bff00e04f1a02ecf4b8410d5796eddda1dc24afc
 1.14.2 42597 638233fd384602862e41590e4b0213242c82257f
+2.5.2 40892 be5eee620d5a75e4142a60858c013a861625b62e
+2.5.3 42328 fc843a8d2f9a0ba0e2f86c0ad9e23b03de1ef99d
+2.5.3 42598 be3a5cb20630b0f420b5531238933f6f3fb8f09a
+3.4.3 54261 1d7cee2116baf1c4247e67a4b5f3c760dd5df7e6
+4.4.2 60895 e4b089c80ceb293931ad97e0b2f90b0b7c2de108
 "
 
 # ask_yes "Question?": Enter, y or yes = yes; n or no = no; anything else asks again
@@ -100,6 +98,70 @@ ask_yes() {
         esac
     done
 }
+
+# --- Clients ---
+# Classic Era lives in _classic_era_; TBC, WotLK or Cataclysm Classic in _classic_ (one of them). One game folder can
+# hold both, they share Data/
+flavor_dir() { case "$1" in era) echo "_classic_era_" ;; *) echo "_classic_" ;; esac; }
+has_flavor() { [ -d "$BASE_DIR/$(flavor_dir "$1")/World of Warcraft Classic.app" ]; }
+flavor_version() {
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
+        "$BASE_DIR/$(flavor_dir "$1")/World of Warcraft Classic.app/Contents/Info.plist" 2>/dev/null
+}
+# era, tbc, wotlk or cata: the client's connect.conf section and addons folder
+client_of() {
+    [ "$1" = era ] && { echo era; return; }
+    case "$(flavor_version classic)" in 3.*) echo wotlk ;; 4.*) echo cata ;; *) echo tbc ;; esac
+}
+client_label() {
+    case "$1" in era) echo "Classic Era" ;; tbc) echo "TBC Classic" ;; wotlk) echo "WotLK Classic" ;; cata) echo "Cataclysm Classic" ;; esac
+}
+
+# set_flavor era|classic: the paths of that client
+set_flavor() {
+    FLAVOR="$1"
+    FLAVOR_DIR="$BASE_DIR/$(flavor_dir "$1")"
+    GAME_APP="$FLAVOR_DIR/World of Warcraft Classic.app"
+    GAME_BIN="$GAME_APP/Contents/MacOS/World of Warcraft Classic"
+    GAME_BAK="${GAME_BIN}_bak"
+    GAME_WTF_DIR="$FLAVOR_DIR/WTF"
+    GAME_CONFIG="$GAME_WTF_DIR/Config.wtf"
+    GAME_ADDONS_DIR="$FLAVOR_DIR/Interface/AddOns"
+    CLASSICPATCH_DYLIB="$GAME_APP/Contents/$CLASSICPATCH_SUBPATH"
+    CLIENT="$(client_of "$1")"
+    CLIENT_NAME="$(client_label "$CLIENT")"
+}
+
+# Both clients here and no --client: ask which one (Enter = Classic Era)
+choose_client() {
+    local answer
+    echo ""
+    echo "=========== Choose a client ==========="
+    echo "  1) $(client_label era) $(flavor_version era)"
+    echo "  2) $(client_label "$(client_of classic)") $(flavor_version classic)"
+    echo "======================================="
+    while true; do
+        read -e -r -p "Enter choice [1-2, Enter = 1]: " answer || answer=""
+        case "${answer:-1}" in
+            1) set_flavor era; break ;;
+            2) set_flavor classic; break ;;
+            *) echo "[!] Invalid selection." >&2 ;;
+        esac
+    done
+}
+
+case "$CLIENT_ARG" in
+    era) set_flavor era ;;
+    tbc|wotlk|cata)
+        set_flavor classic
+        if has_flavor classic && [ "$CLIENT" != "$CLIENT_ARG" ]; then
+            echo "[!] _classic_ folder holds $CLIENT_NAME $(flavor_version classic), not $(client_label "$CLIENT_ARG")." >&2
+            exit 1
+        fi
+        ;;
+    "") if has_flavor era || ! has_flavor classic; then set_flavor era; else set_flavor classic; fi ;;
+    *) echo "[!] --client must be era, tbc, wotlk or cata." >&2; exit 1 ;;
+esac
 
 # --- Client Detection and Patching ---
 # Sets CLIENT_BUILD, CLIENT_VERSION, UNPATCHED_HASH for a known original sha1
@@ -369,6 +431,7 @@ while [[ "$#" -gt 0 ]]; do
             echo ""
             echo "  (no options)           Patch if needed, then launch and connect"
             echo "  --game <dir>           Use the game folder <dir> instead of this launcher's parent folder"
+            echo "  --client <name>        era, tbc, wotlk or cata: the client to start when the game folder holds two"
             echo "  --checkpatch           Print PATCHED, UNPATCHED, UNKNOWN, or MISSING, and exit"
             echo "  --patch                Patch the binary only, don't launch"
             echo "  --reset                Clear the client's saved connection settings and caches"
@@ -396,9 +459,13 @@ while [[ "$#" -gt 0 ]]; do
             if [[ -n "$2" && ! "$2" =~ ^-- ]] && [ -d "$2" ]; then
                 shift 2
             else
-                echo "[!] --game requires an existing game folder (the one that holds _classic_era_)." >&2
+                echo "[!] --game requires an existing game folder (the one that holds _classic_era_ or _classic_)." >&2
                 exit 1
             fi
+            ;;
+        --client)
+            # CLIENT_ARG is already set, in the path definitions
+            shift 2
             ;;
         --reset)
             RESET=true
@@ -478,19 +545,30 @@ done
 
 detect_client
 
-# --checkpatch: print the state and exit - PATCHED also needs classicpatch.dylib in place
+# --checkpatch: print the state and exit - PATCHED also needs classicpatch.dylib in place. A folder with both clients
+# and no --client: one line per client, the exit code of the first one not PATCHED
+patch_state() {
+    local state
+    state=$(client_state)
+    [ "$state" = PATCHED ] && [ ! -f "$CLASSICPATCH_DYLIB" ] && state=UNPATCHED
+    echo "$state"
+}
+state_code() { case "$1" in PATCHED) echo 0 ;; UNPATCHED) echo 1 ;; UNKNOWN) echo 2 ;; *) echo 3 ;; esac; }
 if [ "$CHECK_PATCH" = true ]; then
-    CLIENT_STATE=$(client_state)
-    if [ "$CLIENT_STATE" == "PATCHED" ] && [ ! -f "$CLASSICPATCH_DYLIB" ]; then
-        CLIENT_STATE=UNPATCHED
+    if [ -z "$CLIENT_ARG" ] && has_flavor era && has_flavor classic; then
+        CODE=0
+        for f in era classic; do
+            set_flavor "$f"
+            detect_client
+            CLIENT_STATE=$(patch_state)
+            echo "$(flavor_version "$f") $CLIENT_STATE"
+            [ "$CODE" -eq 0 ] && CODE=$(state_code "$CLIENT_STATE")
+        done
+        exit "$CODE"
     fi
+    CLIENT_STATE=$(patch_state)
     echo "$CLIENT_STATE"
-    case "$CLIENT_STATE" in
-        PATCHED) exit 0 ;;
-        UNPATCHED) exit 1 ;;
-        UNKNOWN) exit 2 ;;
-        *) exit 3 ;;
-    esac
+    exit "$(state_code "$CLIENT_STATE")"
 fi
 
 # Compiled.app-only, build_launcher.sh fills this in
@@ -505,9 +583,14 @@ abort_launch() {
 }
 
 echo "======================================="
-echo "   Classic 1.14 - Patcher & Launcher  "
+echo "     Classic - Patcher & Launcher     "
 echo "======================================="
 [ ${#FILE_ARGS[@]} -gt 0 ] && echo "[*] Options from ${OPTIONS_FILE#"$BASE_DIR/"}: ${FILE_ARGS[*]}"
+if [ -z "$CLIENT_ARG" ] && [ "$GET_MISSING" = false ] && has_flavor era && has_flavor classic; then
+    choose_client
+    detect_client
+fi
+echo "[*] $CLIENT_NAME $(flavor_version "$FLAVOR")"
 
 # --- Client Download ---
 # file_size FILE: its size in bytes, 0 if it is not there
@@ -813,7 +896,11 @@ run_get_client() {
     # Fall through into the patch-and-launch flow below instead of exiting
 }
 
-# 1. Make sure the client is actually here
+# 1. Make sure the client is actually here. Only Classic Era 1.14.0 can be fetched: the others are brought complete
+if [ "$FLAVOR" = classic ] && { [ "$GET_MISSING" = true ] || [ ! -f "$GAME_BIN" ]; }; then
+    echo "[!] No $CLIENT_NAME client to start in $FLAVOR_DIR" >&2
+    abort_launch
+fi
 if [ "$GET_MISSING" = true ]; then
     run_get_client
     # --getmissing only downloads and extracts
@@ -849,7 +936,7 @@ case "$(client_state)" in
         ;;
     *)
         # Read from Supported Clients
-        echo "[!] Patcher is expecting Classic 1.14.0 (40618), 1.14.1 (42032) or 1.14.2 (42597)." >&2
+        echo "[!] Patcher is expecting $(awk 'NF { printf "%s%s (%s)", n++ ? ", " : "", $1, $2 }' <<< "$CLIENTS")." >&2
         echo "    Current file hash: $ACTUAL_HASH" >&2
         print_expected_hashes
         abort_launch
@@ -889,9 +976,11 @@ fi
 # --reset, or the answer to the prompt above
 if [ "$RESET" = true ]; then
     echo "[*] Clearing saved configuration, caches..."
-    # Only this client's section: the others keep theirs
+    # Only this client's section: the others keep theirs. A saved 4.x password for its server goes too
+    RESET_IP="$(conf_section "$CLIENT" | sed -n 's/^SAVED_IP=//p' | tail -1)"
+    [ -n "$RESET_IP" ] && keychain_forget "$RESET_IP"
     write_config ""
-    rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
+    rm -rf "$FLAVOR_DIR/Cache" "$FLAVOR_DIR/Logs"
     set_portal "127.0.0.1"
     # Manual escape hatch - everything below is normally only touched on first use
     strip_quarantine "$GAME_BIN" "$PROXY_DIR" "$OPENSSL_DIR"
@@ -960,11 +1049,12 @@ else
             SAVED_USE_PROXY=false
             echo "    Example: 127.0.0.1 or 127.0.0.1:1119"
         fi
-        # Enter = 127.0.0.1, a wrong address asks again
+        # A wrong or empty address asks again (direct: Enter = 127.0.0.1)
         while true; do
             if [ "$CONNECTION_TYPE" = "PROXY" ]; then
-                read -e -r -p "Enter realmlist server address [127.0.0.1]: " INPUT_IP
-                SAVED_IP=${INPUT_IP:-127.0.0.1}
+                read -e -r -p "Enter realmlist server address: " INPUT_IP
+                SAVED_IP="$INPUT_IP"
+                [ -n "$SAVED_IP" ] || { echo "[!] Enter the server's address." >&2; continue; }
                 validate_server_address "$SAVED_IP" && break
                 echo "[!] '$SAVED_IP' is not a valid IP or hostname." >&2
             else
@@ -1011,6 +1101,11 @@ if [ "$CONNECTION_TYPE" = "PROXY" ]; then
 
     # Add Default Client Build
     PROXY_COMMAND+=("--set" "ClientBuild=$CLIENT_BUILD")
+    # 3.4.3+'s patched login seed comes from the ConnectTo modulus (classicpatch, Ed25519 mode), not appsettings' SeedHex.
+    # As ClientSeed, the key every HermesProxy and fork reads (HermesProxy 4.3+ takes it for SeedHex)
+    case "$CLIENT_VERSION" in
+        3.*|4.*) PROXY_COMMAND+=("--set" "ClientSeed=5FD6800BA7FF0140C7BC8EF56B27B0BF") ;;
+    esac
 
     # Ensure a ServerAddress is present if no config file is passed
     if [ -z "$PROXY_CONFIG_FILE" ]; then
@@ -1118,6 +1213,41 @@ proxy_already_running() {
     # WITHIN_APP:proxy_already_running:end
 }
 
+# 4.x account passwords, in the macOS Keychain under this name, one per server
+KEYCHAIN_SERVICE="Classic Launcher"
+keychain_password() { security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$1" -w 2>/dev/null; }
+# keychain_save SERVER PASSWORD: given to security on its input, so the password is never on a command line
+keychain_save() {
+    local pw="${2//\\/\\\\}"
+    pw="${pw//\"/\\\"}"
+    printf 'add-generic-password -U -s "%s" -a "%s" -w "%s"\n' "$KEYCHAIN_SERVICE" "$1" "$pw" | security -i > /dev/null 2>&1
+}
+keychain_forget() { security delete-generic-password -s "$KEYCHAIN_SERVICE" -a "$1" > /dev/null 2>&1; }
+
+# read_masked PROMPT: a password into MASKED, shown as stars with only the last character typed visible; 1 if the input ends
+read_masked() {
+    local c stars
+    MASKED=""
+    # Ctrl+C cancels the launch, with the typed characters shown again in the terminal
+    trap 'stty echo 2> /dev/null; echo ""; exit 130' INT
+    printf '%s' "$1"
+    while :; do
+        IFS= read -r -s -n 1 c || { trap - INT; echo ""; return 1; }
+        case "$c" in
+            "") break ;;
+            $'\x03') stty echo 2> /dev/null; echo ""; exit 130 ;;
+            $'\x7f'|$'\b') MASKED="${MASKED%?}" ;;
+            [[:cntrl:]]) continue ;;
+            *) MASKED="$MASKED$c" ;;
+        esac
+        stars="$(printf '%*s' "${#MASKED}" '' | tr ' ' '*')"
+        printf '\r\033[K%s%s' "$1" "${stars%?}${MASKED: -1}"
+    done
+    trap - INT
+    # Once entered, all of it hidden
+    printf '\r\033[K%s%s\n' "$1" "$(printf '%*s' "${#MASKED}" '' | tr ' ' '*')"
+}
+
 # CLI default leaves the proxy running - the built .app also stops it
 on_game_closed() {
     # WITHIN_APP:on_game_closed:start
@@ -1155,6 +1285,31 @@ if [ "$LAUNCH_PROXY" = true ] && [ -n "$RUNNING_PID" ]; then
 fi
 
 if [ "$LAUNCH_PROXY" = true ] && [ "$START_PROXY" = true ]; then
+    # 4.x logs in with SRP and never sends the password: the proxy needs the server account's, through its
+    # environment only (never in a file); without a terminal the proxy could not ask for it itself
+    # Asked once per server, then kept in the Keychain (--reset forgets it)
+    case "$CLIENT_VERSION" in
+        4.*)
+            if [ -z "${HERMES_LegacyServerOptions__Password:-}" ]; then
+                HERMES_LegacyServerOptions__Password="$(keychain_password "$SAVED_IP")"
+                [ -n "$HERMES_LegacyServerOptions__Password" ] && echo "[*] Account password for $SAVED_IP: from your Keychain."
+            fi
+            if [ -z "$HERMES_LegacyServerOptions__Password" ]; then
+                echo ""
+                echo "======= Cataclysm Classic Login ======="
+                echo "  Password -> saved locally, in this Mac's Keychain"
+                echo "  Ctrl+C   -> cancel"
+                echo "======================================="
+                while [ -z "$HERMES_LegacyServerOptions__Password" ]; do
+                    read_masked "Enter your account password for $SAVED_IP: " || break
+                    HERMES_LegacyServerOptions__Password="$MASKED"
+                    [ -n "$HERMES_LegacyServerOptions__Password" ] || echo "[!] The password cannot be empty." >&2
+                done
+                [ -n "$HERMES_LegacyServerOptions__Password" ] && keychain_save "$SAVED_IP" "$HERMES_LegacyServerOptions__Password"
+            fi
+            export HERMES_LegacyServerOptions__Password
+            ;;
+    esac
     FULL_PROXY_CMD=("${PROXY_COMMAND[@]}")
     strip_quarantine "$PROXY_DIR" "$PROXY_BIN" "$OPENSSL_DIR"
     chmod +x "$PROXY_BIN" 2>/dev/null

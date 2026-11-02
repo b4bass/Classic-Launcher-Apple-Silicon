@@ -1,30 +1,33 @@
 /*
- * classicpatch.dylib - custom-server patches for the macOS Classic client (1.14.0.40618 and 1.14.2.42597; universal
- * arm64 + x86_64). The client's executable loads it itself (one extra LC_LOAD_DYLIB, added by patch_binary.sh),
+ * classicpatch.dylib - custom-server patches for the macOS Classic clients (Classic Era 1.14.0-1.14.2, TBC Classic
+ * 2.5.2-2.5.3, WotLK Classic 3.4.3, Cataclysm Classic 4.4.2; universal arm64 + x86_64). The client's executable loads it itself (one extra LC_LOAD_DYLIB, added by patch_binary.sh),
  * so it works however the game is started (Finder, open, nohup, a launcher script, "Open using Rosetta").
  * Build: build_classicpatch.sh. arctium_data.h holds the Arctium data (RSA moduli, certificate bundle).
  *
  *   1. The constructor runs before any client code and patches the plaintext data in __TEXT (__const/__cstring):
  *        ConnectTo + GameCrypto RSA modulus, certificate signature modulus, certificate bundle (Arctium data),
- *        ".actual.battle.net" portal suffix, TACT versions URL (Arctium's server, with the client's own build),
- *        telemetry host (-> telemetry.invalid, which never resolves).
+ *        ".actual.battle.net" portal suffix, TACT versions URL (Arctium's server, with the client's own build; 4.4.2's
+ *        https v2 URL: a fixed Arctium address, as Arctium's launcher writes it), telemetry host (-> telemetry.invalid,
+ *        which never resolves). 3.4.3+: the Ed25519 GameCrypto key instead of the certificate data.
  *   2. The client's __TEXT,__text is encrypted on disk and decrypts itself during start-up. A background thread waits
  *      for that, suspends the other threads, FINDS the three code sites by pattern (no fixed addresses, so later
  *      builds may work unchanged) and patches them:
  *        CertBundle  call(0x148505, ...) -> bool test -> early return: the early return is made unconditional
- *        Seed        the function stored next to the 0x576f57 tag in its function table is replaced by a stub
+ *        Seed        the function stored next to the 0x576f57 tag in its function table (1.14.3+: registered by
+ *                    the call right after the one that registers the tag) is replaced by a stub
  *                    that copies the first 16 bytes of the signature modulus slot to [arg0]
  *                    (= HermesProxy's SeedHex 179D3DC3235629D07113A9B3867F97A7)
  *        CertCheck   the check before "Could not validate common name." is forced to succeed
  *      Each site must be found exactly once, otherwise it is left alone (and logged).
  *      The patches are re-checked a few seconds later and re-applied if something overwrote them.
  *
- * Log: _classic_era_/Logs/classicpatch.log (the Logs folder next to the .app), or CLASSICPATCH_LOG = log file (appended).
+ * Log: _classic_era_/Logs/classicpatch.log or _classic_/Logs/classicpatch.log (the Logs folder next to the .app), or CLASSICPATCH_LOG = log file (appended).
  * CLASSICPATCH_TIMEOUT = seconds to wait for the decryption (default 60).
  * Portions (RSA moduli, certificate bundle, byte patterns) derived from the Arctium Launcher,
  * Copyright (c) 2021-2023 Arctium, MIT license: see LICENSE-Arctium.txt in this folder.
  */
 #include <CoreFoundation/CoreFoundation.h>
+#include <errno.h>
 #include <libkern/OSCacheControl.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -51,8 +54,9 @@
 static const uint8_t P_CONNECTTOMODULUS[8] = { 0x91, 0xD5, 0x9B, 0xB7, 0xD4, 0xE1, 0x83, 0xA5 };
 static const uint8_t P_SIGNATUREMODULUS[8] = { 0x35, 0xFF, 0x17, 0xE7, 0x33, 0xC4, 0xD3, 0xD4 };
 static const uint8_t P_CRYPTORSAMODULUS[8] = { 0x71, 0xFD, 0xFA, 0x60, 0x14, 0x0D, 0xF2, 0x05 };
+static const uint8_t P_CRYPTOEDKEY[8] = { 0x15, 0xD6, 0x18, 0xBD, 0x7D, 0xB5, 0x77, 0xBD };      /* recent clients: Ed25519 */
 static const char S_CERTBUNDLE[] = "{\"Created\":";
-static const char S_PORTAL[] = ".actual.battle.net";
+static const char S_PORTAL[] = ".actual.battle.net";                               /* + its NUL */
 static const char S_TELEMETRY[] = "telemetry-in.battle.net";                       /* + its NUL: the host, or the end of its https URL */
 /* Same length: .invalid is reserved and never resolves, so telemetry goes nowhere */
 static const char S_TELEMETRY_OFF[sizeof S_TELEMETRY] = "telemetry.invalid";                               /* + its NUL */
@@ -61,6 +65,7 @@ static const char S_VERSIONS[] = "http://%s.patch.battle.net:1119/%s/versions";
 #define VERSIONS_NEW_FMT "http://ngdp.arctium.io/%%s/%%s/%s/versions"
 _Static_assert(sizeof "http://ngdp.arctium.io/%s/%s/00000/versions" == sizeof S_VERSIONS, "versions URL must keep its length");
 static const char S_COMMONNAME[] = "Could not validate common name. ";
+static const char S_TRUSTCONFIG[] = "Trust Certificates Are Not Configured";
 
 static intptr_t g_slide;
 static uint8_t *g_text;                        /* live __text (slid) */
@@ -143,10 +148,12 @@ typedef struct {
     int found;                     /* number of distinct matches in the last search; patched only when exactly 1 */
     int done;                      /* patched: not searched again */
     double at;                     /* when it was patched (s since start) */
+    int used;                      /* needed by this client's certificate mode */
 } Site;
 
-enum { SITE_CERTBUNDLE, SITE_SEED, SITE_CERTCHECK, NSITE };
-static Site g_site[NSITE] = { { .name = "CertBundle" }, { .name = "Seed" }, { .name = "CertCheck" } };
+enum { SITE_CERTBUNDLE, SITE_SEED, SITE_CERTCHECK, SITE_CERTCHAIN, NSITE };
+static Site g_site[NSITE] = { { .name = "CertBundle" }, { .name = "Seed" }, { .name = "CertCheck" }, { .name = "CertChain" } };
+static int g_used;                 /* how many sites this client needs */
 
 static void site_hit(Site *s, size_t off, const void *newb, size_t len) {
     if (s->done || (s->found && s->off == off)) return;   /* already patched / same site reached twice */
@@ -231,6 +238,15 @@ static void find_seed(size_t n, uint64_t sig) {
     for (size_t i = 0; i + 12 < n; i++) {
         int rn = movz_w(W(i), 0x6f57);
         if (rn < 0 || movk_w16(W(i + 1), 0x57) != rn) continue;
+        /* 1.14.3+: tag and function are registered by two calls - mov w0,#tag ; bl ; adr/adrp x0,FN ; bl */
+        if (rn == 0 && i + 6 < n && is_bl(W(i + 2))) {
+            int r; uint64_t a;
+            if (addr_of(i + 3, n, &r, &a) && r == 0 && a >= g_textAddr && a < g_textAddr + g_textSize) {
+                uint32_t stub[5] = { enc_adrp(a, sig, 1), 0x91000021u | ((uint32_t)(sig & 0xFFF) << 10), 0x3dc00020u, 0x3d800000u, 0xd65f03c0u };
+                site_hit(&g_site[SITE_SEED], (size_t)(a - g_textAddr), stub, sizeof stub);
+                continue;
+            }
+        }
         int base = -1, fr = -1; int64_t off = -1; uint64_t fn = 0;
         for (size_t k = i + 2; k <= i + 10 && k < n; k++) {
             uint32_t x = W(k); int r; uint64_t a;
@@ -265,11 +281,30 @@ static void find_certcheck(size_t n) {
     }
 }
 
+/* The function that judges the server's certificate chain (SecTrustEvaluate) is made to return true: the one that
+ * references "Trust Certificates Are Not Configured", from its prologue (sub sp / stp x29,x30,[sp,#-n]!) */
+static void find_certchain(size_t n) {
+    uint64_t s = data_string(S_TRUSTCONFIG);
+    if (!s) return;
+    for (size_t i = 0; i + 4 < n; i++) {
+        int rd; uint64_t a;
+        if ((W(i) & 0x9F000000u) != 0x90000000u || !addr_of(i, n, &rd, &a) || a != s) continue;
+        for (size_t j = i; j-- > 0 && j + 64 > i;) {
+            uint32_t w = W(j);
+            if ((w & 0xFF8003FFu) == 0xD10003FFu || (w & 0xFFC07FFFu) == 0xA9807BFDu) {
+                uint32_t p[2] = { 0x52800020u, 0xD65F03C0u };   /* mov w0, #1 ; ret */
+                site_hit(&g_site[SITE_CERTCHAIN], j * 4, p, sizeof p);
+                break;
+            }
+        }
+    }
+}
 static void find_sites(void) {
     size_t n = g_textSize / 4;
     find_certbundle(n);
     find_seed(n, g_sigSlot);
     find_certcheck(n);
+    find_certchain(n);
 }
 
 #else
@@ -304,6 +339,18 @@ static void find_certbundle(size_t n) {
 static void find_seed(size_t n, uint64_t sig) {
     for (size_t i = 0; i + 40 < n; i++) {
         const uint8_t *b = B(i);
+        /* 1.14.3+: tag and function are registered by two calls - mov edi,tag ; call ; lea rdi,[rip+FN] */
+        if (b[0] == 0xBF && b[1] == 0x57 && b[2] == 0x6F && b[3] == 0x57 && b[4] == 0x00 && b[5] == 0xE8
+            && b[10] == 0x48 && b[11] == 0x8D && b[12] == 0x3D) {
+            uint64_t fn = PCx(i + 17) + (uint64_t)(int64_t)rel32(i + 13);
+            if (fn >= g_textAddr && fn < g_textAddr + g_textSize) {
+                uint8_t p[17] = { 0x48, 0x8D, 0x35, 0, 0, 0, 0, 0x0F, 0x10, 0x06, 0x0F, 0x11, 0x07, 0x48, 0x89, 0xF8, 0xC3 };
+                int32_t r32 = (int32_t)(int64_t)(sig - (fn + 7));
+                memcpy(p + 3, &r32, 4);
+                site_hit(&g_site[SITE_SEED], (size_t)(fn - g_textAddr), p, sizeof p);
+            }
+            continue;
+        }
         if (b[0] != 0xC7 || b[1] != 0x05 || b[6] != 0x57 || b[7] != 0x6F || b[8] != 0x57 || b[9] != 0x00) continue;
         uint64_t tag = PCx(i + 10) + (uint64_t)(int64_t)rel32(i + 2), fn = 0;
         int reg = -1;
@@ -354,10 +401,29 @@ static void find_certcheck(size_t n) {
     }
 }
 
+/* The function that judges the server's certificate chain (SecTrustEvaluate) is made to return true: the one that
+ * references "Trust Certificates Are Not Configured", from its prologue (push rbp ; mov rbp, rsp) */
+static void find_certchain(size_t n) {
+    uint64_t s = data_string(S_TRUSTCONFIG);
+    if (!s) return;
+    for (size_t i = 0; i + 7 < n; i++) {
+        const uint8_t *c = B(i);
+        if ((c[0] & 0xFB) != 0x48 || c[1] != 0x8D || (c[2] & 0xC7) != 0x05 || PCx(i + 7) + (uint64_t)(int64_t)rel32(i + 3) != s) continue;
+        for (size_t p = i; p-- > 0 && p + 256 > i;) {
+            const uint8_t *f = B(p);
+            if (f[0] == 0x55 && f[1] == 0x48 && f[2] == 0x89 && f[3] == 0xE5) {
+                uint8_t pt[6] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };   /* mov eax, 1 ; ret */
+                site_hit(&g_site[SITE_CERTCHAIN], p, pt, sizeof pt);
+                break;
+            }
+        }
+    }
+}
 static void find_sites(void) {
     find_certbundle(g_textSize);
     find_seed(g_textSize, g_sigSlot);
     find_certcheck(g_textSize);
+    find_certchain(g_textSize);
 }
 #endif
 
@@ -403,7 +469,7 @@ static int apply_sites(int *result) {
     for (int i = 0; i < NSITE; i++) {
         Site *s = &g_site[i];
         result[i] = 0;
-        if (!s->done && s->found != 1) continue;
+        if (!s->used || (!s->done && s->found != 1)) continue;
         if (bytes_at(s, s->newb)) { result[i] = 2; s->done = 1; ok++; continue; }
         if (!bytes_at(s, s->oldb)) { result[i] = -1; continue; }
         result[i] = write_text(g_text + s->off, s->newb, s->len) ? 1 : -2;
@@ -416,6 +482,7 @@ static void log_sites(const int *result, int reapply) {
     for (int i = 0; i < NSITE; i++) {
         const Site *s = &g_site[i];
         unsigned long long a = (unsigned long long)(g_textAddr + s->off);
+        if (!s->used) continue;
         if (reapply) {
             if (result[i] == 1) say("[%s] 0x%llx: RE-patched", s->name, a);
             else if (result[i] < 0) say("[%s] 0x%llx: could not be re-patched (%d)", s->name, a, result[i]);
@@ -449,12 +516,12 @@ static void *watch(void *arg) {
         paused += now() - t1;
         resume_others();
         searches++;
-        if (ok == NSITE || now() - g_t0 - tDec > 10.0) break;
+        if (ok == g_used || now() - g_t0 - tDec > 10.0) break;
         usleep(20000);
     }
     say("client code changed at %.3f s; %d search(es), client paused %.0f ms in total", tDec, searches, paused * 1000.0);
     log_sites(result, 0);
-    say("%d of %d code patches in place", ok, NSITE);
+    say("%d of %d code patches in place", ok, g_used);
     free(g_textCopy);
     g_textCopy = NULL;
 
@@ -490,6 +557,20 @@ static int versions_url(char *out, size_t n) {
     const char *dot = strrchr(g_clientVersion, '.');
     if (!dot || strlen(dot + 1) != 5 || strspn(dot + 1, "0123456789") != 5) return 0;
     return snprintf(out, n, VERSIONS_NEW_FMT, dot + 1) == (int)n - 1;
+}
+
+/* 4.4.2 asks https://<region>.version.battle.net/v2/products/<product>/versions, its region in lowercase, which
+ * Arctium's server does not answer (/us/ is a 404, /EU/ works): a fixed address with the client's build, as Arctium's
+ * launcher writes it, padded with a query string the server ignores (the URL keeps its length) */
+static const char S_VERSIONS2[] = "https://%s.version.battle.net/v2/products/%s/versions";
+static int versions2_url(char *out, size_t n) {
+    const char *dot = strrchr(g_clientVersion, '.');
+    if (!dot || strlen(dot + 1) != 5 || strspn(dot + 1, "0123456789") != 5) return 0;
+    int len = snprintf(out, n, "http://ngdp.arctium.io/EU/wow/%s/versions?", dot + 1);
+    if (len <= 0 || len > (int)n - 1) return 0;
+    memset(out + len, 'x', n - 1 - (size_t)len);
+    out[n - 1] = 0;
+    return 1;
 }
 
 /* default log: <folder that holds the .app>/Logs/classicpatch.log, i.e. _classic_era_/Logs/classicpatch.log */
@@ -549,10 +630,23 @@ static void classicpatch_init(void) {
     /* 1. data patches, before any client code runs */
     uint8_t *sig = NULL;
     int ok = 1;
-    ok &= data_patch("ConnectTo RsaModulus", P_CONNECTTOMODULUS, 8, ARC_RSA_MODULUS, 256, NULL);
-    ok &= data_patch("GameCrypto RsaModulus", P_CRYPTORSAMODULUS, 8, ARC_RSA_MODULUS, 256, NULL);
-    ok &= data_patch("Certificate Signature RsaModulus", P_SIGNATUREMODULUS, 8, ARC_SIGNATURE_MODULUS, 256, &sig);
-    ok &= data_patch("Certificate Bundle", S_CERTBUNDLE, sizeof S_CERTBUNDLE - 1, ARC_CERT_BUNDLE, sizeof ARC_CERT_BUNDLE, NULL);
+    size_t cnt;
+    if (find_data(P_SIGNATUREMODULUS, 8, &cnt)) {
+        /* Certificate bundle + signature RSA modulus (1.14.0-1.14.2, 2.5.x); the Seed reads the signature modulus */
+        ok &= data_patch("ConnectTo RsaModulus", P_CONNECTTOMODULUS, 8, ARC_RSA_MODULUS, 256, NULL);
+        ok &= data_patch("GameCrypto RsaModulus", P_CRYPTORSAMODULUS, 8, ARC_RSA_MODULUS, 256, NULL);
+        ok &= data_patch("Certificate Signature RsaModulus", P_SIGNATUREMODULUS, 8, ARC_SIGNATURE_MODULUS, 256, &sig);
+        ok &= data_patch("Certificate Bundle", S_CERTBUNDLE, sizeof S_CERTBUNDLE - 1, ARC_CERT_BUNDLE, sizeof ARC_CERT_BUNDLE, NULL);
+        g_site[SITE_CERTBUNDLE].used = g_site[SITE_SEED].used = g_site[SITE_CERTCHECK].used = 1;
+    } else {
+        /* Recent clients (3.4.3): Ed25519 GameCrypto key, certificate chain judged by SecTrust; the Seed reads the
+         * patched ConnectTo modulus, so HermesProxy's SeedHex is its first 16 bytes (5FD6800BA7FF0140C7BC8EF56B27B0BF) */
+        say("no certificate signature modulus - recent client, Ed25519 mode");
+        ok &= data_patch("ConnectTo RsaModulus", P_CONNECTTOMODULUS, 8, ARC_RSA_MODULUS, 256, &sig);
+        ok &= data_patch("GameCrypto Ed25519 PublicKey", P_CRYPTOEDKEY, 8, ARC_ED_PUBLIC_KEY, sizeof ARC_ED_PUBLIC_KEY, NULL);
+        g_site[SITE_SEED].used = g_site[SITE_CERTCHECK].used = g_site[SITE_CERTCHAIN].used = 1;
+    }
+    for (int i = 0; i < NSITE; i++) g_used += g_site[i].used;
     static const uint8_t zeros[sizeof S_PORTAL - 1] = { 0 };
     ok &= data_patch("Login Portal", S_PORTAL, sizeof S_PORTAL, zeros, sizeof zeros, NULL);
     char versions[sizeof S_VERSIONS];
@@ -560,6 +654,11 @@ static void classicpatch_init(void) {
         say("[Versions URL] no 5-digit build in %s - optional, continuing", g_clientVersion);
     else if (!data_patch("Versions URL", S_VERSIONS, sizeof S_VERSIONS, versions, sizeof versions, NULL))
         say("[Versions URL] optional - continuing");
+    char versions2[sizeof S_VERSIONS2];
+    size_t v2count;
+    if (find_data(S_VERSIONS2, sizeof S_VERSIONS2, &v2count) && versions2_url(versions2, sizeof versions2)
+        && !data_patch("Versions URL (v2)", S_VERSIONS2, sizeof S_VERSIONS2, versions2, sizeof versions2, NULL))
+        say("[Versions URL (v2)] optional - continuing");
     if (!data_patch("Telemetry", S_TELEMETRY, sizeof S_TELEMETRY, S_TELEMETRY_OFF, sizeof S_TELEMETRY_OFF, NULL))
         say("[Telemetry] optional - continuing");
     if (!ok || !sig) { say("a data patch failed - code patches skipped, the client will not connect to a custom server"); return; }
