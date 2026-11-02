@@ -76,12 +76,6 @@ To use a game folder somewhere else.
 launch.sh --game /path/to/Game
 ```
 
-To start without copying the `addons` folder into the game.
-
-```bash
-launch.sh --noaddon
-```
-
 To list all available options.
 
 ```bash
