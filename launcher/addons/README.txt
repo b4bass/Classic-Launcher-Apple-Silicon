@@ -1,3 +1,4 @@
-Put addon folders here (each one holding its .toc file).
-At every start, the launcher copies them into the game's Interface/AddOns folder,
-replacing an older copy of the same addon.
+Create a folder named after a supported game client, then place your addon folders inside it.
+Supported folder names: era, tbc, wotlk, cata.
+Examples: era/Questie or tbc/Questie.
+At every launch, the launcher automatically copies these addons to the corresponding game’s AddOns folder, replacing any older copies of them.

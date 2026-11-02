@@ -46,6 +46,9 @@ for ((i = 1; i < $#; i++)); do
 done
 
 USER_CONF="$BASE_DIR/connect.conf"
+# The client: its section of connect.conf and its addons folder (era, tbc, wotlk, cata)
+CLIENT="era"
+CLIENT_NAME="Classic Era"
 GAME_APP="$BASE_DIR/_classic_era_/World of Warcraft Classic.app"
 GAME_BIN="$GAME_APP/Contents/MacOS/World of Warcraft Classic"
 GAME_BAK="${GAME_BIN}_bak"
@@ -56,10 +59,13 @@ OPENSSL_DIR="$LAUNCHER_DIR/openssl"
 MIRROR_LIST_FILE="$LAUNCHER_DIR/archive_mirrors.txt"
 # Pieces of a client download, kept until it is installed so a stopped download continues
 DOWNLOAD_DIR="$BASE_DIR/.download"
-DOWNLOAD_PARTS=8
+# Connections per server, each taking the next chunk: archive.org gives each connection only a little, so the
+# file's other servers are used too (archive.org: 3, so 24 connections)
+DOWNLOAD_PER_SERVER=8
+DOWNLOAD_CHUNK=$((64 * 1024 * 1024))
 PROXY_DIR="$LAUNCHER_DIR/proxy"
 PROXY_BIN="$PROXY_DIR/HermesProxy"
-# Addon folders put here are copied into the game's Interface/AddOns at every start
+# Addon folders put in its era, tbc, wotlk or cata folder are copied into that client's Interface/AddOns at every start
 ADDONS_DIR="$LAUNCHER_DIR/addons"
 # The app reads the launcher folder next to it, not its own copy from when it was built
 [ "$WITHIN_APP" = true ] && [ -d "$BASE_DIR/launcher/addons" ] && ADDONS_DIR="$BASE_DIR/launcher/addons"
@@ -255,19 +261,82 @@ set_portal() {
     fi
 }
 
-# 0 = usable, 1 = no file yet, 2 = garbage
+# connect.conf holds one section per client, in this order (others are kept after them):
+#   [era]
+#   SAVED_USE_PROXY=true
+#   SAVED_IP=logon.example.com
+CONF_SECTIONS="era tbc wotlk cata"
+
+# Older names of a section: the product name test builds wrote (wow_classic: TBC, WotLK and Cataclysm share it)
+conf_old_name() { case "$1" in era) echo "wow_classic_era" ;; tbc|wotlk|cata) echo "wow_classic" ;; esac; }
+
+# conf_section NAME [OLD]: the lines of that section, else of its older name (OLD, "-" for none). Lines before the
+# first section are era's (0.75 and before knew only Classic Era), unless the file has an [era] section
+conf_section() {
+    [ -r "$USER_CONF" ] || return 0
+    awk -v want="$1" -v old="${2:-$(conf_old_name "$1")}" '{ sub(/\r$/, "") }
+        /^\[.*\]$/ { name = substr($0, 2, length($0) - 2); if (name == want) has = 1; started = 1; next }
+        /^[[:space:]]*(#|$)/ { next }
+        !started { pre[++np] = $0; next }
+        name == want { print; next }
+        name == old { o[++no] = $0 }
+        END { if (has) exit
+              if (no) for (i = 1; i <= no; i++) print o[i]
+              else if (want == "era") for (i = 1; i <= np; i++) print pre[i] }' "$USER_CONF"
+}
+
+# The sections the file has besides the usual ones and their older names, in file order
+conf_other_names() {
+    [ -r "$USER_CONF" ] || return 0
+    awk -v known=" $CONF_SECTIONS wow_classic_era wow_classic " '{ sub(/\r$/, "") } /^\[.*\]$/ {
+        name = substr($0, 2, length($0) - 2); if (index(known, " " name " ") == 0 && !seen[name]++) print name }' "$USER_CONF"
+}
+
+# write_config [LINES]: the file again, with LINES as this client's section (none: the section goes, and the file
+# once it is empty)
+write_config() {
+    local tmp="${USER_CONF}.tmp.$$" name body any=false
+    {
+        echo "# Connection settings saved by the launcher, one section per client. launch.sh --reset clears one section."
+        for name in $CONF_SECTIONS $(conf_other_names); do
+            if [ "$name" = "$CLIENT" ]; then
+                body="$1"
+            else
+                # The shared older [wow_classic] is only taken over by the client in _classic_ (kept below otherwise)
+                case "$name" in tbc|wotlk|cata) body="$(conf_section "$name" -)" ;; *) body="$(conf_section "$name")" ;; esac
+            fi
+            [ -n "$body" ] || continue
+            printf '\n[%s]\n%s\n' "$name" "$body"
+        done
+        case "$CLIENT" in tbc|wotlk|cata) ;; *)
+            body="$(conf_section wow_classic -)"
+            [ -n "$body" ] && printf '\n[%s]\n%s\n' wow_classic "$body"
+            ;;
+        esac
+    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    grep -q '^\[' "$tmp" && any=true
+    if [ "$any" = true ]; then
+        chmod 600 "$tmp" && mv "$tmp" "$USER_CONF"
+    else
+        rm -f "$tmp" "$USER_CONF"
+    fi
+}
+
+# This client's settings: 0 = usable, 1 = none yet, 2 = garbage
 load_config() {
     [ -f "$USER_CONF" ] || return 1
     [ -r "$USER_CONF" ] || return 2 # Can't read it, so treat it like garbage
-    local key value use_proxy="" saved_ip=""
-    while IFS='=' read -r key value || [ -n "$key" ]; do
+    local key value use_proxy="" saved_ip="" section
+    section="$(conf_section "$CLIENT")"
+    [ -n "$section" ] || return 1
+    while IFS='=' read -r key value; do
         case "$key" in
             SAVED_USE_PROXY) use_proxy="$value" ;;
             SAVED_IP) saved_ip="$value" ;;
         esac
-    done < "$USER_CONF"
+    done <<< "$section"
 
-    # Both keys have to be present and sane, or the whole file counts as garbage
+    # Both keys have to be present and sane, or the section counts as garbage
     case "$use_proxy" in
         true) validate_server_address "$saved_ip" || return 2 ;;
         false) validate_bnet_address "$saved_ip" || return 2 ;;
@@ -281,11 +350,7 @@ load_config() {
 }
 
 save_config() {
-    local tmp="${USER_CONF}.tmp.$$"
-    {
-        printf 'SAVED_USE_PROXY=%s\n' "$SAVED_USE_PROXY"
-        printf 'SAVED_IP=%s\n' "$SAVED_IP"
-    } > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$USER_CONF"
+    write_config "$(printf 'SAVED_USE_PROXY=%s\nSAVED_IP=%s' "$SAVED_USE_PROXY" "$SAVED_IP")"
 }
 
 # --- Argument Parsing ---
@@ -306,17 +371,16 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --game <dir>           Use the game folder <dir> instead of this launcher's parent folder"
             echo "  --checkpatch           Print PATCHED, UNPATCHED, UNKNOWN, or MISSING, and exit"
             echo "  --patch                Patch the binary only, don't launch"
-            echo "  --reset                Clear saved connection config and caches"
-            echo "  --getmissing [url|zip] Fetch an untouched 1.14 client, or install it from a zip on this Mac"
-            echo "                         (prompts for a mirror if neither is given)"
+            echo "  --reset                Clear the client's saved connection settings and caches"
+            echo "  --getmissing [url|zip] Fetch an untouched 1.14 client, or install it from a zip on this computer"
             echo "  --bnet [ip[:port]]     Connect directly, bypassing the Connection Proxy (default ip: 127.0.0.1)"
             echo "  --switchproxy <name>   Use another proxy binary: its name in the proxy/ folder, or its path"
             echo "  --config <file>        Pass a custom proxy configuration file"
             echo "  --set <key=value>      Pass a proxy override, repeatable"
-            echo "  --noaddon              Don't copy the addons folder into the game"
+            echo "  --noaddon              Don't copy launcher/addons/<client> into the game"
             echo "  --help, -h             Show this help"
             echo ""
-            echo "Options in launcher/options.txt are read first, at every start."
+            echo "Options in launcher/options.txt are read first as defaults; command-line arguments override them."
             exit 0
             ;;
         --checkpatch)
@@ -455,23 +519,6 @@ free_bytes() { df -k "$BASE_DIR" | awk 'NR == 2 { print $4 * 1024 }'; }
 # gb BYTES: e.g. 6.8 GB
 gb() { awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
 
-# fetch_part URL FILE FIRST LAST: those bytes of URL into FILE, asking only for what FILE is still missing
-fetch_part() {
-    local url="$1" file="$2" first="$3" last="$4" want have attempt=0
-    want=$((last - first + 1))
-    while [ "$attempt" -lt 30 ]; do
-        have=$(file_size "$file")
-        # More than asked: the server ignored the range - start this piece over
-        if [ "$have" -gt "$want" ]; then : > "$file"; have=0; fi
-        [ "$have" -eq "$want" ] && return 0
-        attempt=$((attempt + 1))
-        # A connection that stalls for a minute is dropped and asked again
-        curl -fsL --connect-timeout 20 --speed-limit 1024 --speed-time 60 \
-            -r "$((first + have))-$last" "$url" >> "$file" 2>/dev/null || sleep 2
-    done
-    [ "$(file_size "$file")" -eq "$want" ]
-}
-
 # Stops the piece downloads (each is a subshell running curl)
 stop_download() {
     local pid
@@ -482,9 +529,63 @@ stop_download() {
     DOWNLOAD_PIDS=()
 }
 
-# download_file URL OUT: in DOWNLOAD_PARTS pieces at once when the server allows it; stopped pieces are continued later
+# fetch_part URL FILE FIRST LAST: those bytes of URL into FILE, asking only for what FILE is still missing
+fetch_part() {
+    local url="$1" file="$2" first="$3" last="$4" want have before attempt=0
+    want=$((last - first + 1))
+    while [ "$attempt" -lt 30 ]; do
+        have=$(file_size "$file")
+        # More than asked: the server ignored the range - start this piece over
+        if [ "$have" -gt "$want" ]; then : > "$file"; have=0; fi
+        [ "$have" -eq "$want" ] && return 0
+        before=$have
+        # A slow connection (under 50 KB/s for 30 s) is dropped and opened again: archive.org sets each connection's
+        # speed when it opens. Low enough not to drop every connection of a slow line. Only tries that brought nothing count
+        curl -fsL --connect-timeout 20 --speed-limit 51200 --speed-time 30 \
+            -r "$((first + have))-$last" "$url" >> "$file" 2>/dev/null
+        if [ "$(file_size "$file")" -eq "$before" ]; then
+            attempt=$((attempt + 1))
+            sleep 2
+        fi
+    done
+    [ "$(file_size "$file")" -eq "$want" ]
+}
+
+# fetch_chunks URL OUT SIZE WORKER: chunks WORKER, WORKER + DOWNLOAD_PARTS, ... of URL into OUT.partN
+fetch_chunks() {
+    local url="$1" out="$2" size="$3" n first last
+    for ((n = $4; n * DOWNLOAD_CHUNK < size; n += DOWNLOAD_PARTS)); do
+        first=$((n * DOWNLOAD_CHUNK))
+        last=$((first + DOWNLOAD_CHUNK - 1))
+        [ "$last" -ge "$size" ] && last=$((size - 1))
+        fetch_part "$url" "$out.part$n" "$first" "$last" || return 1
+    done
+}
+
+# mirror_urls URL SIZE: URL, then the same file on the item's other servers when it is on archive.org (each server
+# limits what it gives, so they add up); only those that report SIZE
+mirror_urls() {
+    local url="$1" size="$2" item path meta dir host u
+    # The link itself, redirect followed on every request: where it leads can expire (GitHub's after an hour)
+    echo "$url"
+    [[ "$url" =~ ^https?://archive\.org/download/([^/]+)/(.+)$ ]] || return 0
+    item="${BASH_REMATCH[1]}"; path="${BASH_REMATCH[2]}"
+    meta="$(mktemp)"
+    curl -fsL --connect-timeout 20 --max-time 30 -o "$meta" "https://archive.org/metadata/$item" || { rm -f "$meta"; return 0; }
+    dir="$(plutil -extract dir raw "$meta" 2>/dev/null)"
+    for host in "$(plutil -extract d1 raw "$meta" 2>/dev/null)" "$(plutil -extract d2 raw "$meta" 2>/dev/null)"; do
+        [ -n "$host" ] && [ -n "$dir" ] || continue
+        u="https://$host$dir/$path"
+        [ "$(curl -sI --connect-timeout 20 --max-time 30 "$u" | tr -d '\r' \
+            | awk 'tolower($1) == "content-length:" { print $2 }')" = "$size" ] && echo "$u"
+    done
+    rm -f "$meta"
+}
+
+# download_file URL OUT: in DOWNLOAD_CHUNK chunks over DOWNLOAD_PARTS connections when the server allows it;
+# a stopped download continues from the chunks already here
 download_file() {
-    local url="$1" out="$2" size=0 ranges="" part_size i first last have start_have total t0 elapsed rate alive pid failed=0
+    local url="$1" out="$2" size=0 ranges="" chunks i have total elapsed rate alive pid failed=0
     # Size and byte-range support, asked up to 3 times (mirrors answer an error now and then)
     for i in 1 2 3; do
         size="$(curl -sIL --connect-timeout 20 --max-time 60 "$url" | tr -d '\r' \
@@ -493,10 +594,10 @@ download_file() {
         [ "$ranges" = 206 ] && break
         sleep 3
     done
-    # Pieces of another download (other URL or size) are not mixed in; an unknown size keeps them
-    if [ "$size" -gt 0 ] && [ "$(cat "$out.source" 2>/dev/null)" != "$url $size" ]; then
+    # Chunks of another download (other URL, size or chunk size) are not mixed in; an unknown size keeps them
+    if [ "$size" -gt 0 ] && [ "$(cat "$out.source" 2>/dev/null)" != "$url $size $DOWNLOAD_CHUNK" ]; then
         rm -f "$out" "$out".part*
-        echo "$url $size" > "$out.source"
+        echo "$url $size $DOWNLOAD_CHUNK" > "$out.source"
     fi
     [ "$size" -gt 0 ] && [ "$(file_size "$out")" -eq "$size" ] && return 0
 
@@ -507,35 +608,34 @@ download_file() {
         return $?
     fi
 
-    part_size=$(( (size + DOWNLOAD_PARTS - 1) / DOWNLOAD_PARTS ))
-    have=0
-    for ((i = 0; i < DOWNLOAD_PARTS; i++)); do
-        have=$((have + $(file_size "$out.part$i")))
-    done
+    chunks=$(( (size + DOWNLOAD_CHUNK - 1) / DOWNLOAD_CHUNK ))
+    downloaded() { local n t=0; for ((n = 0; n < chunks; n++)); do t=$((t + $(file_size "$out.part$n"))); done; echo $t; }
+    have=$(downloaded)
     if [ "$have" -gt 0 ]; then
         echo "[*] Continuing the download: $(awk -v h="$have" -v s="$size" 'BEGIN { printf "%.1f of %.1f GB", h / 1e9, s / 1e9 }') already here."
     fi
 
+    local urls=()
+    while IFS= read -r i; do urls+=("$i"); done < <(mirror_urls "$url" "$size")
+    [ "${#urls[@]}" -gt 1 ] && echo "[*] Downloading from ${#urls[@]} servers at once."
+    DOWNLOAD_PARTS=$((DOWNLOAD_PER_SERVER * ${#urls[@]}))
     DOWNLOAD_PIDS=()
-    for ((i = 0; i < DOWNLOAD_PARTS; i++)); do
-        first=$((i * part_size))
-        [ "$first" -ge "$size" ] && break
-        last=$((first + part_size - 1))
-        [ "$last" -ge "$size" ] && last=$((size - 1))
-        fetch_part "$url" "$out.part$i" "$first" "$last" &
+    for ((i = 0; i < DOWNLOAD_PARTS && i < chunks; i++)); do
+        fetch_chunks "${urls[i % ${#urls[@]}]}" "$out" "$size" "$i" &
         DOWNLOAD_PIDS+=($!)
     done
 
-    # Redraw a single status line in place
-    start_have=$have
-    t0=$(date +%s)
+    # Redraw a single status line in place; the speed is that of the last 10 s
+    local hist=() now
     while :; do
         alive=0
         for pid in "${DOWNLOAD_PIDS[@]}"; do kill -0 "$pid" 2>/dev/null && alive=1; done
-        total=0
-        for ((i = 0; i < DOWNLOAD_PARTS; i++)); do total=$((total + $(file_size "$out.part$i"))); done
-        elapsed=$(( $(date +%s) - t0 ))
-        [ "$elapsed" -gt 0 ] && rate=$(( (total - start_have) / elapsed )) || rate=0
+        total=$(downloaded)
+        now=$(date +%s)
+        hist+=("$now:$total")
+        [ "${#hist[@]}" -gt 6 ] && hist=("${hist[@]:1}")
+        elapsed=$(( now - ${hist[0]%%:*} ))
+        [ "$elapsed" -gt 0 ] && rate=$(( (total - ${hist[0]#*:}) / elapsed )) || rate=0
         printf '\r\033[K    %s' "$(awk -v t="$total" -v s="$size" -v r="$rate" \
             'BEGIN { printf "%.1f / %.1f GB  %d%%  %.1f MB/s", t / 1e9, s / 1e9, t * 100 / s, r / 1e6 }')"
         [ "$alive" -eq 1 ] || break
@@ -549,10 +649,9 @@ download_file() {
     DOWNLOAD_PIDS=()
     [ "$failed" -eq 0 ] || return 1
 
-    # Join the pieces: only one piece's worth of extra disk at a time
+    # Join the chunks: only one chunk's worth of extra disk at a time
     mv -f "$out.part0" "$out" || return 1
-    for ((i = 1; i < DOWNLOAD_PARTS; i++)); do
-        [ -f "$out.part$i" ] || continue
+    for ((i = 1; i < chunks; i++)); do
         cat "$out.part$i" >> "$out" && rm -f "$out.part$i" || return 1
     done
     [ "$(file_size "$out")" -eq "$size" ]
@@ -772,13 +871,13 @@ if [ "$RESET" = false ] && [ "$PATCH_ONLY" = false ]; then
         echo "[*] Loading saved configuration from connect.conf..."
     # Nothing usable - reset below, unless arguments will overwrite it anyway
     elif [ "$CONF_STATE" -eq 2 ] && [ -z "$DIRECT_BNET_IP" ] && [ "$PROXY_ARGS_PASSED" = false ]; then
-        echo "[!] connect.conf holds no usable settings." >&2
+        echo "[!] connect.conf holds no usable settings for $CLIENT_NAME." >&2
         echo ""
         echo "==== Invalid Launcher Config File ====="
         echo "  [Yes] -> Reset the configuration"
         echo "   No   -> Exit, fix or delete connect.conf yourself"
         echo "======================================="
-        if ask_yes "Reset connect.conf now?"; then
+        if ask_yes "Reset $CLIENT_NAME's settings in connect.conf now?"; then
             RESET=true
         else
             echo "[!] Left the file as it is: $USER_CONF" >&2
@@ -790,7 +889,8 @@ fi
 # --reset, or the answer to the prompt above
 if [ "$RESET" = true ]; then
     echo "[*] Clearing saved configuration, caches..."
-    rm -f "$USER_CONF"
+    # Only this client's section: the others keep theirs
+    write_config ""
     rm -rf "$BASE_DIR/_classic_era_/Cache" "$BASE_DIR/_classic_era_/Logs"
     set_portal "127.0.0.1"
     # Manual escape hatch - everything below is normally only touched on first use
@@ -946,18 +1046,18 @@ elif [ "$CONNECTION_TYPE" = "DIRECT" ]; then
     set_portal "$SAVED_IP"
 fi
 
-# Copies each addon folder of launcher/addons into the game, replacing an older copy of the same addon
+# Copies each addon folder of launcher/addons/<client> into the game, replacing an older copy of the same addon
 install_addons() {
     local addon count=0
     [ -d "$ADDONS_DIR" ] || return 0
-    for addon in "$ADDONS_DIR"/*/; do
+    for addon in "$ADDONS_DIR/$CLIENT"/*/; do
         [ -d "$addon" ] || continue
         addon="${addon%/}"
         mkdir -p "$GAME_ADDONS_DIR"
         rm -rf "${GAME_ADDONS_DIR:?}/$(basename "$addon")"
         ditto "$addon" "$GAME_ADDONS_DIR/$(basename "$addon")" && count=$((count + 1))
     done
-    [ "$count" -gt 0 ] && echo "[*] Installed $count addon(s) from the launcher's addons folder."
+    [ "$count" -gt 0 ] && echo "[*] Installed $count addon(s) from launcher/addons/$CLIENT."
     return 0
 }
 
