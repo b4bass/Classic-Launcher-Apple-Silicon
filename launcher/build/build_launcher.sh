@@ -8,7 +8,8 @@ BASE_DIR="$(dirname "$LAUNCHER_DIR")"                      # game folder
 # game folder. Classic Era lives in _classic_era_; TBC, WotLK or Cataclysm Classic in _classic_
 GAME_APP_ERA="$BASE_DIR/_classic_era_/World of Warcraft Classic.app"
 GAME_APP_CLASSIC="$BASE_DIR/_classic_/World of Warcraft Classic.app"
-CLASSIC_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$GAME_APP_CLASSIC/Contents/Info.plist" 2>/dev/null)"
+# (plutil writes its errors to stdout: kept only when it could read the version)
+CLASSIC_VERSION="$(plutil -extract CFBundleVersion raw "$GAME_APP_CLASSIC/Contents/Info.plist" 2>/dev/null)" || CLASSIC_VERSION=""
 case "$CLASSIC_VERSION" in 3.*) CLASSIC_CLIENT=wotlk ;; 4.*) CLASSIC_CLIENT=cata ;; *) CLASSIC_CLIENT=tbc ;; esac
 
 if [ $# -eq 0 ]; then
@@ -58,7 +59,6 @@ ICON_ICNS="$BUILD_TMP/wow.icns"
 for cmd in sips iconutil osacompile codesign awk rsync plutil; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "[!] Required command not found: $cmd" >&2; exit 1; }
 done
-[ -x /usr/libexec/PlistBuddy ] || { echo "[!] Required tool not found: /usr/libexec/PlistBuddy" >&2; exit 1; }
 [ -f "$ICON_PNG" ] || { echo "[!] Icon source not found at $ICON_PNG" >&2; exit 1; }
 if [ ! -f "$PATCH_DIR/classicpatch.dylib" ]; then
     /bin/bash "$PATCH_DIR/build_classicpatch.sh" || exit 1
@@ -102,8 +102,7 @@ osacompile -o "$APP_OUT" "$BUILD_TMP/launcher.applescript" \
 # 4. Inject the icon
 echo "[*] Injecting icon..."
 cp "$ICON_ICNS" "$APP_OUT/Contents/Resources/wow.icns"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIconFile wow" "$APP_OUT/Contents/Info.plist" 2>/dev/null || \
-/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string wow" "$APP_OUT/Contents/Info.plist"
+plutil -replace CFBundleIconFile -string wow "$APP_OUT/Contents/Info.plist"
 
 # 5. Copy content into the app bundle so it's self-contained
 # Everything but the build folder (of which the app only needs PATCH_FILES), the proxy's own logs and account data,
@@ -190,6 +189,12 @@ else
 fi
 EOF
 override_block proxy_already_running "$BUILD_TMP/body_proxy_already_running.sh"
+
+# No question: "Closing ..." follows
+cat > "$BUILD_TMP/body_close_other_games.sh" << 'EOF'
+:
+EOF
+override_block close_other_games "$BUILD_TMP/body_close_other_games.sh"
 
 cat > "$BUILD_TMP/body_after_game_launched.sh" << 'EOF'
 close_window

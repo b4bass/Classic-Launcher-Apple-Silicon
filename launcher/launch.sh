@@ -104,10 +104,11 @@ ask_yes() {
 # hold both, they share Data/
 flavor_dir() { case "$1" in era) echo "_classic_era_" ;; *) echo "_classic_" ;; esac; }
 has_flavor() { [ -d "$BASE_DIR/$(flavor_dir "$1")/World of Warcraft Classic.app" ]; }
-flavor_version() {
-    /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
-        "$BASE_DIR/$(flavor_dir "$1")/World of Warcraft Classic.app/Contents/Info.plist" 2>/dev/null
-}
+# plist_value PLIST KEY: a value of an Info.plist, nothing when the file or the key is not there
+# (plutil writes its errors to stdout: only a value it could read is printed)
+plist_value() { local v; v="$(plutil -extract "$2" raw "$1" 2>/dev/null)" && echo "$v"; }
+# The client's version, nothing when it is not there
+flavor_version() { plist_value "$BASE_DIR/$(flavor_dir "$1")/World of Warcraft Classic.app/Contents/Info.plist" CFBundleVersion; }
 # era, tbc, wotlk or cata: the client's connect.conf section and addons folder
 client_of() {
     [ "$1" = era ] && { echo era; return; }
@@ -154,6 +155,8 @@ case "$CLIENT_ARG" in
     era) set_flavor era ;;
     tbc|wotlk|cata)
         set_flavor classic
+        # Nothing in _classic_ yet: the client asked for (messages name it)
+        has_flavor classic || { CLIENT="$CLIENT_ARG"; CLIENT_NAME="$(client_label "$CLIENT")"; }
         if has_flavor classic && [ "$CLIENT" != "$CLIENT_ARG" ]; then
             echo "[!] _classic_ folder holds $CLIENT_NAME $(flavor_version classic), not $(client_label "$CLIENT_ARG")." >&2
             exit 1
@@ -583,14 +586,15 @@ abort_launch() {
 }
 
 echo "======================================="
-echo "     Classic - Patcher & Launcher     "
+echo "   WoW Classic - Patcher & Launcher"
 echo "======================================="
 [ ${#FILE_ARGS[@]} -gt 0 ] && echo "[*] Options from ${OPTIONS_FILE#"$BASE_DIR/"}: ${FILE_ARGS[*]}"
 if [ -z "$CLIENT_ARG" ] && [ "$GET_MISSING" = false ] && has_flavor era && has_flavor classic; then
     choose_client
     detect_client
 fi
-echo "[*] $CLIENT_NAME $(flavor_version "$FLAVOR")"
+CLIENT_SHOWN_VERSION="$(flavor_version "$FLAVOR")"
+echo "[*] $CLIENT_NAME${CLIENT_SHOWN_VERSION:+ $CLIENT_SHOWN_VERSION}"
 
 # --- Client Download ---
 # file_size FILE: its size in bytes, 0 if it is not there
@@ -1156,6 +1160,56 @@ install_addons() {
     return 0
 }
 
+# The game data (Data/data) is shared by the clients of this folder; the first one started keeps it open in its own
+# layout. Classic Era and TBC Classic use an older one (Data/data/shmem version 4), which Cataclysm Classic cannot open:
+# started after them, it stops with "Tact instance creation failed. Error (5)". Started first, it runs beside them;
+# once they are closed, it rewrites the file in its own layout.
+# other_games: "PID command" of this folder's other running clients
+other_games() {
+    ps -axo pid=,command= | grep -F -- "$BASE_DIR/_" | grep -F -- "/World of Warcraft Classic.app/Contents/MacOS/World of Warcraft Classic" \
+        | grep -v -F -- "$GAME_BIN"
+}
+
+# quit_game PID: asks that game to quit, as its Quit menu does (a kill would leave the game reporting a hang), and
+# waits up to 30 s for it
+quit_game() {
+    local i
+    osascript -l JavaScript -e "ObjC.import('AppKit'); var a = \$.NSRunningApplication.runningApplicationWithProcessIdentifier($1); a.isNil() ? false : a.terminate" > /dev/null 2>&1
+    for ((i = 0; i < 30; i++)); do
+        kill -0 "$1" 2> /dev/null || return 0
+        sleep 1
+    done
+    return 1
+}
+
+# CLI default asks before closing the other game - the built .app closes it alone, as it restarts the proxy
+close_other_games() {
+    # WITHIN_APP:close_other_games:start
+    if ! ask_yes "Close $RUNNING_NAME and start $CLIENT_NAME?"; then
+        echo "    To play both, start $CLIENT_NAME first, then $RUNNING_NAME." >&2
+        abort_launch
+    fi
+    # WITHIN_APP:close_other_games:end
+}
+
+case "$CLIENT_VERSION" in
+    4.*)
+        RUNNING_GAMES="$(other_games)"
+        if [ -n "$RUNNING_GAMES" ] && [ "$(od -An -tu1 -N1 "$BASE_DIR/Data/data/shmem" 2>/dev/null | tr -d ' ')" = 4 ]; then
+            case "$RUNNING_GAMES" in */_classic_era_/*) RUNNING_NAME="Classic Era" ;; *) RUNNING_NAME="TBC Classic" ;; esac
+            echo "[!] $CLIENT_NAME cannot start while $RUNNING_NAME is running from this game folder." >&2
+            close_other_games
+            echo "[*] Closing $RUNNING_NAME..."
+            for pid in $(awk '{ print $1 }' <<< "$RUNNING_GAMES"); do
+                if ! quit_game "$pid"; then
+                    echo "[!] $RUNNING_NAME did not close: close it yourself, then run again." >&2
+                    abort_launch
+                fi
+            done
+        fi
+        ;;
+esac
+
 # 4. Execution Phase
 [ "$NO_ADDONS" = true ] || install_addons
 # Job control on, so the game gets its own process group, away from Ctrl+C
@@ -1226,26 +1280,27 @@ keychain_forget() { security delete-generic-password -s "$KEYCHAIN_SERVICE" -a "
 
 # read_masked PROMPT: a password into MASKED, shown as stars with only the last character typed visible; 1 if the input ends
 read_masked() {
-    local c stars
+    local c
     MASKED=""
     # Ctrl+C cancels the launch, with the typed characters shown again in the terminal
     trap 'stty echo 2> /dev/null; echo ""; exit 130' INT
     printf '%s' "$1"
+    # Only the end of the line changes (the line may wrap in a narrow terminal): the last character typed shows,
+    # the one before turns into a star
     while :; do
         IFS= read -r -s -n 1 c || { trap - INT; echo ""; return 1; }
         case "$c" in
             "") break ;;
             $'\x03') stty echo 2> /dev/null; echo ""; exit 130 ;;
-            $'\x7f'|$'\b') MASKED="${MASKED%?}" ;;
+            $'\x7f'|$'\b') [ -n "$MASKED" ] && { MASKED="${MASKED%?}"; printf '\b \b'; } ;;
             [[:cntrl:]]) continue ;;
-            *) MASKED="$MASKED$c" ;;
+            *) [ -n "$MASKED" ] && printf '\b*'; MASKED="$MASKED$c"; printf '%s' "$c" ;;
         esac
-        stars="$(printf '%*s' "${#MASKED}" '' | tr ' ' '*')"
-        printf '\r\033[K%s%s' "$1" "${stars%?}${MASKED: -1}"
     done
     trap - INT
-    # Once entered, all of it hidden
-    printf '\r\033[K%s%s\n' "$1" "$(printf '%*s' "${#MASKED}" '' | tr ' ' '*')"
+    # Once entered, the last character hidden too
+    [ -n "$MASKED" ] && printf '\b*'
+    echo ""
 }
 
 # CLI default leaves the proxy running - the built .app also stops it
