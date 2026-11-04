@@ -11,6 +11,11 @@ SAVED_USE_PROXY=false
 LAUNCH_PROXY=false
 CHECK_PATCH=false
 NO_ADDONS=false
+# --versionurl / --cdnsurl: unset keeps what the installed classicpatch.dylib holds, "default" empties it
+VERSIONS_URL=""
+VERSIONS_URL_SET=false
+CDNS_URL=""
+CDNS_URL_SET=false
 
 # --- Path Definitions ---
 LAUNCHER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -254,19 +259,61 @@ patch_executable() {
 }
 
 # Puts or replaces classicpatch.dylib in the game app to be loaded by the patched binary
+# --versionurl / --cdnsurl live in the installed copy of classicpatch.dylib: after a 14-byte tag, 64 bytes, in each slice
+# (classicpatch.c). The launcher's own copy keeps empty slots; a newer one gets the installed copy's addresses
+SLOT_VERSIONS="CPVERSIONSURL="
+SLOT_CDNS="CPCDNSURL====="
+# slot_offsets FILE TAG: where TAG is in FILE (one per slice)
+slot_offsets() { LC_ALL=C grep -obUa -- "$2" "$1" 2>/dev/null | cut -d: -f1; }
+# slot_get FILE TAG: the address in FILE's first slot, nothing when it is empty
+slot_get() {
+    local off
+    off="$(slot_offsets "$1" "$2" | head -1)"
+    [ -n "$off" ] && dd if="$1" bs=1 skip=$((off + 14)) count=64 2>/dev/null | tr -d '\0'
+}
+# slot_set FILE TAG ADDRESS: ADDRESS, zero-padded to 64 bytes, in every slot of FILE
+slot_set() {
+    local off
+    for off in $(slot_offsets "$1" "$2"); do
+        { printf '%s' "$3"; head -c $((64 - ${#3})) /dev/zero; } \
+            | dd of="$1" bs=1 seek=$((off + 14)) conv=notrunc 2>/dev/null || return 1
+    done
+}
+
 install_classicpatch() {
-    if ! cmp -s "$PATCH_DIR_DYLIB" "$CLASSICPATCH_DYLIB"; then
-        if [ ! -f "$PATCH_DIR_DYLIB" ]; then
-            echo "[!] classicpatch.dylib not found at $PATCH_DIR_DYLIB" >&2
-            echo "    Build it with launcher/build/patch/build_classicpatch.sh (you may need Apple's Command Line Tools)." >&2
-            abort_launch
-        fi
-        echo "[*] Installing classicpatch.dylib..."
-        if ! mkdir -p "$(dirname "$CLASSICPATCH_DYLIB")" || ! cp -f "$PATCH_DIR_DYLIB" "$CLASSICPATCH_DYLIB"; then
-            echo "[!] Failed to install classicpatch.dylib into $CLASSICPATCH_DYLIB" >&2
-            abort_launch
-        fi
+    local versions cdns new
+    if [ ! -f "$PATCH_DIR_DYLIB" ]; then
+        echo "[!] classicpatch.dylib not found at $PATCH_DIR_DYLIB" >&2
+        echo "    Build it with launcher/build/patch/build_classicpatch.sh (you may need Apple's Command Line Tools)." >&2
+        abort_launch
     fi
+    # This launch's addresses, else the ones the client already has
+    versions="$(slot_get "$CLASSICPATCH_DYLIB" "$SLOT_VERSIONS")"
+    cdns="$(slot_get "$CLASSICPATCH_DYLIB" "$SLOT_CDNS")"
+    [ "$VERSIONS_URL_SET" = true ] && versions="$VERSIONS_URL"
+    [ "$CDNS_URL_SET" = true ] && cdns="$CDNS_URL"
+    # The launcher's copy, with them written in and signed again (a fixed identifier: by default it would take the
+    # temporary file's name, and differ at every launch), next to the installed one
+    if ! mkdir -p "$(dirname "$CLASSICPATCH_DYLIB")" || ! new="$(mktemp "$CLASSICPATCH_DYLIB.XXXXXX")" \
+        || ! cp -f "$PATCH_DIR_DYLIB" "$new"; then
+        echo "[!] Failed to install classicpatch.dylib into $CLASSICPATCH_DYLIB" >&2
+        abort_launch
+    fi
+    if [ -n "$versions$cdns" ] && { [ -z "$(slot_offsets "$new" "$SLOT_VERSIONS")" ] \
+        || ! slot_set "$new" "$SLOT_VERSIONS" "$versions" || ! slot_set "$new" "$SLOT_CDNS" "$cdns" \
+        || ! codesign -f -s - -i classicpatch "$new" > /dev/null 2>&1; }; then
+        rm -f "$new"
+        echo "[!] Could not write --versionurl/--cdnsurl into classicpatch.dylib (one older than this launcher?)" >&2
+        abort_launch
+    fi
+    if cmp -s "$new" "$CLASSICPATCH_DYLIB"; then
+        rm -f "$new"
+    else
+        echo "[*] Installing classicpatch.dylib..."
+        mv -f "$new" "$CLASSICPATCH_DYLIB"
+    fi
+    [ -n "$versions" ] && echo "[*] Versions address (--versionurl): $versions"
+    [ -n "$cdns" ] && echo "[*] Download servers address (--cdnsurl): $cdns"
     strip_quarantine "$CLASSICPATCH_DYLIB"
 }
 
@@ -444,6 +491,10 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --config <file>        Pass a custom proxy configuration file"
             echo "  --set <key=value>      Pass a proxy override, repeatable"
             echo "  --noaddon              Don't copy launcher/addons/<client> into the game"
+            echo "  --versionurl <url>     Ask this address for the client's version instead of Arctium's (as Arctium's"
+            echo "                         launcher); kept for this client, \"default\" goes back. At most 43 characters"
+            echo "  --cdnsurl <url>        Ask this address for the download servers instead of Blizzard's; kept for"
+            echo "                         this client, \"default\" goes back. At most 39 characters"
             echo "  --help, -h             Show this help"
             echo ""
             echo "Options in launcher/options.txt are read first as defaults; command-line arguments override them."
@@ -456,6 +507,27 @@ while [[ "$#" -gt 0 ]]; do
         --noaddon)
             NO_ADDONS=true
             shift
+            ;;
+        --versionurl|--cdnsurl)
+            # The client fills these addresses with its region and product: up to two %s take them (as in Arctium's
+            # launcher), any other % is written as %% (classicpatch.c), so it counts twice
+            if [[ -z "${2:-}" || "$2" =~ ^-- ]]; then
+                echo "[!] $1 needs an address (http://... or https://...), or \"default\"." >&2
+                exit 1
+            fi
+            URL_MAX=43; [ "$1" = --cdnsurl ] && URL_MAX=39
+            URL_NO_ARGS="${2//%s/}"; URL_ARGS=$(( (${#2} - ${#URL_NO_ARGS}) / 2 ))
+            URL_PERCENT="${URL_NO_ARGS//[^%]/}"
+            if [ "$2" != default ] && { [[ ! "$2" =~ ^https?://[^[:space:]]+$ ]] || [ "$URL_ARGS" -gt 2 ] \
+                || [ $(( ${#2} + ${#URL_PERCENT} )) -gt "$URL_MAX" ]; }; then
+                echo "[!] $1: '$2' is not an http:// or https:// address of at most $URL_MAX characters" >&2
+                echo "    (at most two %s, for the region and the product; any other % counts twice)." >&2
+                exit 1
+            fi
+            URL_VALUE="$2"; [ "$2" = default ] && URL_VALUE=""
+            if [ "$1" = --versionurl ]; then VERSIONS_URL="$URL_VALUE"; VERSIONS_URL_SET=true
+            else CDNS_URL="$URL_VALUE"; CDNS_URL_SET=true; fi
+            shift 2
             ;;
         --game)
             # BASE_DIR is already set, in the path definitions

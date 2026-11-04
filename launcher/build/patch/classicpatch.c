@@ -9,6 +9,8 @@
  *        ".actual.battle.net" portal suffix, TACT versions URL (Arctium's server, with the client's own build; 4.4.2's
  *        https v2 URL: a fixed Arctium address, as Arctium's launcher writes it), telemetry host (-> telemetry.invalid,
  *        which never resolves). 3.4.3+: the Ed25519 GameCrypto key instead of the certificate data.
+ *      launch.sh --versionurl / --cdnsurl write other addresses into the installed copy of this library (its two
+ *      slots, below): the versions URL(s) and the TACT cdns URL then point there instead.
  *   2. The client's __TEXT,__text is encrypted on disk and decrypts itself during start-up. A background thread waits
  *      for that, suspends the other threads, FINDS the three code sites by pattern (no fixed addresses, so later
  *      builds may work unchanged) and patches them:
@@ -563,6 +565,33 @@ static int versions_url(char *out, size_t n) {
  * Arctium's server does not answer (/us/ is a 404, /EU/ works): a fixed address with the client's build, as Arctium's
  * launcher writes it, padded with a query string the server ignores (the URL keeps its length) */
 static const char S_VERSIONS2[] = "https://%s.version.battle.net/v2/products/%s/versions";
+static const char S_CDNS[] = "http://%s.patch.battle.net:1119/%s/cdns";
+
+/* --versionurl / --cdnsurl: launch.sh writes the address, NUL-terminated, after the 14-byte tag of these slots in the
+ * installed copy of this library (in each slice), then signs it again; empty: Arctium's versions address, Blizzard's
+ * cdns one. Not const and read through a volatile pointer: the compiler must not assume the slots stay empty */
+#define SLOT_TAG 14
+#define SLOT_SIZE 64
+__attribute__((used)) static char g_versionsSlot[SLOT_TAG + SLOT_SIZE] = "CPVERSIONSURL=";
+__attribute__((used)) static char g_cdnsSlot[SLOT_TAG + SLOT_SIZE] = "CPCDNSURL=====";
+
+/* slot_patch NAME ORIG SIZE SLOT: writes the slot's address over the client's string ORIG (SIZE bytes with its NUL),
+ * zero-padded. The client fills the string as a format with its region and product: the first two %s stay (as in
+ * Arctium's launcher), any other % is doubled (a stray %d or %n would read or write what is not there). 1 if done */
+static int slot_patch(const char *name, const char *orig, size_t size, const char *slot) {
+    const volatile char *v = slot + SLOT_TAG;
+    char url[SLOT_SIZE * 2] = { 0 };
+    size_t n = 0;
+    int args = 0;
+    for (size_t i = 0; i < SLOT_SIZE && v[i]; i++) {
+        if (v[i] == '%' && !(i + 1 < SLOT_SIZE && v[i + 1] == 's' && args++ < 2)) url[n++] = '%';
+        url[n++] = v[i];
+    }
+    if (!n) return 0;
+    if (n >= size || size > sizeof url) { say("[%s] address too long (%zu of %zu characters) - not used", name, n, size - 1); return 0; }
+    return data_patch(name, orig, size, url, size, NULL);
+}
+
 static int versions2_url(char *out, size_t n) {
     const char *dot = strrchr(g_clientVersion, '.');
     if (!dot || strlen(dot + 1) != 5 || strspn(dot + 1, "0123456789") != 5) return 0;
@@ -650,15 +679,20 @@ static void classicpatch_init(void) {
     static const uint8_t zeros[sizeof S_PORTAL - 1] = { 0 };
     ok &= data_patch("Login Portal", S_PORTAL, sizeof S_PORTAL, zeros, sizeof zeros, NULL);
     char versions[sizeof S_VERSIONS];
-    if (!versions_url(versions, sizeof versions))
+    size_t vcount;
+    if (!find_data(S_VERSIONS, sizeof S_VERSIONS, &vcount) || slot_patch("Versions URL (--versionurl)", S_VERSIONS, sizeof S_VERSIONS, g_versionsSlot))
+        ;   /* 4.4.2 has only the v2 one, below */
+    else if (!versions_url(versions, sizeof versions))
         say("[Versions URL] no 5-digit build in %s - optional, continuing", g_clientVersion);
     else if (!data_patch("Versions URL", S_VERSIONS, sizeof S_VERSIONS, versions, sizeof versions, NULL))
         say("[Versions URL] optional - continuing");
     char versions2[sizeof S_VERSIONS2];
-    size_t v2count;
-    if (find_data(S_VERSIONS2, sizeof S_VERSIONS2, &v2count) && versions2_url(versions2, sizeof versions2)
+    if (find_data(S_VERSIONS2, sizeof S_VERSIONS2, &vcount)
+        && !slot_patch("Versions URL (v2, --versionurl)", S_VERSIONS2, sizeof S_VERSIONS2, g_versionsSlot)
+        && versions2_url(versions2, sizeof versions2)
         && !data_patch("Versions URL (v2)", S_VERSIONS2, sizeof S_VERSIONS2, versions2, sizeof versions2, NULL))
         say("[Versions URL (v2)] optional - continuing");
+    slot_patch("CDNs URL (--cdnsurl)", S_CDNS, sizeof S_CDNS, g_cdnsSlot);
     if (!data_patch("Telemetry", S_TELEMETRY, sizeof S_TELEMETRY, S_TELEMETRY_OFF, sizeof S_TELEMETRY_OFF, NULL))
         say("[Telemetry] optional - continuing");
     if (!ok || !sig) { say("a data patch failed - code patches skipped, the client will not connect to a custom server"); return; }
